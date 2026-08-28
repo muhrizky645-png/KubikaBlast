@@ -1,5 +1,16 @@
+// Dukung DUA backend input Unity: Input Manager (lama) & Input System (baru).
+// Kalau project cuma pakai Input System baru (default Unity 6 URP), branch
+// USE_NEW_INPUT yang dipakai. Kalau ada Input Manager lama (atau "Both"),
+// pakai API lama. Jadi script ini jalan tanpa perlu ubah Player Settings.
+#if ENABLE_INPUT_SYSTEM && !ENABLE_LEGACY_INPUT_MANAGER
+#define USE_NEW_INPUT
+#endif
+
 using System.Collections.Generic;
 using UnityEngine;
+#if USE_NEW_INPUT
+using UnityEngine.InputSystem;
+#endif
 using KubikaBlast;
 
 /// <summary>
@@ -78,7 +89,7 @@ public class BlastInput : MonoBehaviour
         SetGhost(haveCell, piece, col, row, canPlace);
 
         // Taruh potongan saat pointer dilepas di sel yang valid (mendukung klik & drag-drop).
-        if (haveCell && canPlace && !_rotating && Input.GetMouseButtonUp(0))
+        if (haveCell && canPlace && !_rotating && PointerReleased())
         {
             if (_game.TryPlace(_current, col, row))
             {
@@ -98,26 +109,24 @@ public class BlastInput : MonoBehaviour
 
         // keyboard: Q/panah-kiri putar satu arah, E/panah-kanan arah sebaliknya
         float k = 0f;
-        if (Input.GetKey(KeyCode.Q) || Input.GetKey(KeyCode.LeftArrow)) k += 1f;
-        if (Input.GetKey(KeyCode.E) || Input.GetKey(KeyCode.RightArrow)) k -= 1f;
+        if (RotLeftHeld()) k += 1f;
+        if (RotRightHeld()) k -= 1f;
         deltaDeg += k * keyRotateSpeed * Time.deltaTime;
 
         // drag klik-kanan (desktop)
-        if (Input.GetMouseButtonDown(1)) { _rotating = true; _lastPointerX = Input.mousePosition.x; }
-        if (Input.GetMouseButtonUp(1)) _rotating = false;
-        if (_rotating && Input.GetMouseButton(1))
+        if (RightDown()) { _rotating = true; _lastPointerX = PointerPosition().x; }
+        if (RightUp()) _rotating = false;
+        if (_rotating && RightHeld())
         {
-            float dx = Input.mousePosition.x - _lastPointerX;
-            _lastPointerX = Input.mousePosition.x;
+            float px = PointerPosition().x;
+            float dx = px - _lastPointerX;
+            _lastPointerX = px;
             deltaDeg += -dx * dragRotateSpeed;
         }
 
         // dua jari (touch)
-        if (Input.touchCount == 2)
-        {
-            float avgX = (Input.GetTouch(0).deltaPosition.x + Input.GetTouch(1).deltaPosition.x) * 0.5f;
-            deltaDeg += -avgX * dragRotateSpeed;
-        }
+        float twoFingerX = TwoFingerAvgDeltaX();
+        if (Mathf.Abs(twoFingerX) > 0f) deltaDeg += -twoFingerX * dragRotateSpeed;
 
         if (Mathf.Abs(deltaDeg) > 0.0001f)
             _game.transform.Rotate(0f, deltaDeg, 0f, Space.World);
@@ -126,10 +135,10 @@ public class BlastInput : MonoBehaviour
     // ================= PILIH POTONGAN TRAY =================
     void HandleSelection()
     {
-        if (Input.GetKeyDown(KeyCode.Alpha1)) TrySelect(0);
-        if (Input.GetKeyDown(KeyCode.Alpha2)) TrySelect(1);
-        if (Input.GetKeyDown(KeyCode.Alpha3)) TrySelect(2);
-        if (Input.GetKeyDown(KeyCode.Tab)) SelectNextUnused();
+        if (Digit1Down()) TrySelect(0);
+        if (Digit2Down()) TrySelect(1);
+        if (Digit3Down()) TrySelect(2);
+        if (TabDown()) SelectNextUnused();
     }
 
     BlastCore.Piece CurrentPiece()
@@ -178,7 +187,7 @@ public class BlastInput : MonoBehaviour
         float R = _game.Radius;
         if (R <= 0f) return false;
 
-        Ray ray = _cam.ScreenPointToRay(Input.mousePosition);
+        Ray ray = _cam.ScreenPointToRay(PointerPosition());
 
         // ubah ray ke ruang lokal BlastGame supaya rotasi tabung ikut diperhitungkan
         Vector3 o = _game.transform.InverseTransformPoint(ray.origin);
@@ -274,5 +283,135 @@ public class BlastInput : MonoBehaviour
         if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", col);
         m.color = col;
         return m;
+    }
+
+    // ==================================================================
+    // ============ ABSTRAKSI INPUT (lama vs baru) ======================
+    // ==================================================================
+    Vector2 PointerPosition()
+    {
+#if USE_NEW_INPUT
+        var m = Mouse.current;
+        if (m != null) return m.position.ReadValue();
+        var ts = Touchscreen.current;
+        if (ts != null && ts.primaryTouch != null) return ts.primaryTouch.position.ReadValue();
+        return Vector2.zero;
+#else
+        return Input.mousePosition;
+#endif
+    }
+
+    bool PointerReleased() // klik kiri dilepas / tap selesai
+    {
+#if USE_NEW_INPUT
+        var m = Mouse.current;
+        if (m != null && m.leftButton.wasReleasedThisFrame) return true;
+        var ts = Touchscreen.current;
+        if (ts != null && ts.primaryTouch != null && ts.primaryTouch.press.wasReleasedThisFrame) return true;
+        return false;
+#else
+        return Input.GetMouseButtonUp(0);
+#endif
+    }
+
+    bool RightDown()
+    {
+#if USE_NEW_INPUT
+        return Mouse.current != null && Mouse.current.rightButton.wasPressedThisFrame;
+#else
+        return Input.GetMouseButtonDown(1);
+#endif
+    }
+
+    bool RightUp()
+    {
+#if USE_NEW_INPUT
+        return Mouse.current != null && Mouse.current.rightButton.wasReleasedThisFrame;
+#else
+        return Input.GetMouseButtonUp(1);
+#endif
+    }
+
+    bool RightHeld()
+    {
+#if USE_NEW_INPUT
+        return Mouse.current != null && Mouse.current.rightButton.isPressed;
+#else
+        return Input.GetMouseButton(1);
+#endif
+    }
+
+    bool RotLeftHeld()
+    {
+#if USE_NEW_INPUT
+        var k = Keyboard.current;
+        return k != null && (k.qKey.isPressed || k.leftArrowKey.isPressed);
+#else
+        return Input.GetKey(KeyCode.Q) || Input.GetKey(KeyCode.LeftArrow);
+#endif
+    }
+
+    bool RotRightHeld()
+    {
+#if USE_NEW_INPUT
+        var k = Keyboard.current;
+        return k != null && (k.eKey.isPressed || k.rightArrowKey.isPressed);
+#else
+        return Input.GetKey(KeyCode.E) || Input.GetKey(KeyCode.RightArrow);
+#endif
+    }
+
+    bool Digit1Down()
+    {
+#if USE_NEW_INPUT
+        var k = Keyboard.current; return k != null && k.digit1Key.wasPressedThisFrame;
+#else
+        return Input.GetKeyDown(KeyCode.Alpha1);
+#endif
+    }
+
+    bool Digit2Down()
+    {
+#if USE_NEW_INPUT
+        var k = Keyboard.current; return k != null && k.digit2Key.wasPressedThisFrame;
+#else
+        return Input.GetKeyDown(KeyCode.Alpha2);
+#endif
+    }
+
+    bool Digit3Down()
+    {
+#if USE_NEW_INPUT
+        var k = Keyboard.current; return k != null && k.digit3Key.wasPressedThisFrame;
+#else
+        return Input.GetKeyDown(KeyCode.Alpha3);
+#endif
+    }
+
+    bool TabDown()
+    {
+#if USE_NEW_INPUT
+        var k = Keyboard.current; return k != null && k.tabKey.wasPressedThisFrame;
+#else
+        return Input.GetKeyDown(KeyCode.Tab);
+#endif
+    }
+
+    float TwoFingerAvgDeltaX()
+    {
+#if USE_NEW_INPUT
+        var ts = Touchscreen.current;
+        if (ts == null) return 0f;
+        int n = 0; float sum = 0f;
+        foreach (var t in ts.touches)
+        {
+            if (t.isInProgress) { sum += t.delta.ReadValue().x; n++; }
+        }
+        return n == 2 ? sum * 0.5f : 0f;
+#else
+        if (Input.touchCount == 2)
+            return (Input.GetTouch(0).deltaPosition.x + Input.GetTouch(1).deltaPosition.x) * 0.5f;
+        return 0f;
+#endif
     }
 }
