@@ -28,10 +28,10 @@ public class BlastGame : MonoBehaviour
     public float drumRadiusFactor = 0.55f;  // drum dibuat lebih kecil (spool dalam)
     public bool showAxle = true;
 
-    [Header("Kamera")]
+    [Header("Kamera (auto-fit)")]
     public bool autoCamera = true;          // UNCHECK untuk pakai kamera manualmu
-    public float camDistanceFactor = 3.2f;
-    public float camHeightFactor = 0.8f;
+    public float cameraFitPadding = 1.15f;  // >1 = kamera agak mundur biar tabung tak mepet tepi
+    public float cameraHeightOffset = 0f;   // geser kamera naik(+)/turun(-) dalam unit
 
     [Header("Debug")]
     public bool demoFill = false;           // isi grid contoh (dulu Tahap 2). Default OFF.
@@ -194,17 +194,31 @@ public class BlastGame : MonoBehaviour
         mr.sharedMaterial = _mats[color % _mats.Length];
     }
 
-    // ===== Kamera membidik titik tengah tabung (bagian 9.2) =====
+    // ===== Kamera AUTO-FIT: hitung jarak supaya SELURUH tabung muat di layar =====
+    // Memperhitungkan FOV kamera + rasio layar (penting untuk layar HP portrait).
     void SetupCamera()
     {
         if (!autoCamera) return; // biarkan kamera manual apa adanya
         var cam = Camera.main;
         if (cam == null) return;
-        float centerY = height * cellHeight / 2f;
-        Vector3 target = new Vector3(0, centerY, 0);
-        float dist = _radius * camDistanceFactor;
-        cam.transform.position = new Vector3(0, centerY + _radius * camHeightFactor, -dist);
-        cam.transform.LookAt(target);
+
+        float totalH = height * cellHeight;
+        float centerY = totalH / 2f;
+
+        // setengah-ukuran tabung yang harus muat di layar
+        float halfH = totalH / 2f + flangeThickness;   // arah tinggi
+        float halfW = _radius + flangeMargin;          // arah lebar (radius luar)
+
+        float tanV = Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad);
+        float aspect = Mathf.Max(0.0001f, cam.aspect); // lebar / tinggi
+        float tanH = tanV * aspect;
+
+        float distForHeight = halfH / Mathf.Max(0.0001f, tanV);
+        float distForWidth = halfW / Mathf.Max(0.0001f, tanH);
+        float dist = Mathf.Max(distForHeight, distForWidth) * cameraFitPadding;
+
+        cam.transform.position = new Vector3(0f, centerY + cameraHeightOffset, -dist);
+        cam.transform.LookAt(new Vector3(0f, centerY, 0f));
     }
 
     // ===== Util warna & material =====
