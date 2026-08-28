@@ -444,7 +444,8 @@ public class BlastGame : MonoBehaviour
     // ===== Blok DEFAULT saat mulai / Restart = POLA acak flat (ala Block Blast) =====
     // Mengisi SELURUH tabung (bukan menumpuk dari bawah) dengan salah satu POLA yang
     // dipilih ACAK tiap mulai game -> tampilan selalu berbeda & menarik.
-    // Dijaga agar TIDAK memicu clear otomatis: tak ada cincin (baris) atau kolom penuh.
+    // Dijaga agar TIDAK memicu clear otomatis (tak ada cincin/kolom penuh) DAN
+    // TIDAK langsung game over (minimal satu potongan tray harus muat).
     void StartingFill()
     {
         if (numColors <= 0) return;
@@ -476,8 +477,8 @@ public class BlastGame : MonoBehaviour
                     case 2: // pita horizontal (baris selang-seling)
                         fill = (r % 2 == 0) && rng.NextDouble() <= 0.85;
                         break;
-                    case 3: // papan catur
-                        fill = ((c + r) % 2 == 0);
+                    case 3: // pasangan 2 blok SERONG ke atas (diisi terpisah di bawah)
+                        fill = false;
                         break;
                     case 4: // diagonal melingkar di tabung
                         fill = ((c + r) % 3 == 0);
@@ -498,8 +499,9 @@ public class BlastGame : MonoBehaviour
         }
 
         if (pattern == 6) FillClusters(rng);
+        else if (pattern == 3) FillDiagonalPairs(rng);
 
-        // ==== PENGAMAN: jangan sampai ada cincin/kolom PENUH (biar tak auto-clear) ====
+        // ==== PENGAMAN 1: jangan sampai ada cincin/kolom PENUH (biar tak auto-clear) ====
         for (int r = 0; r < height; r++)
         {
             bool full = true;
@@ -511,6 +513,36 @@ public class BlastGame : MonoBehaviour
             bool full = true;
             for (int r = 0; r < height; r++) if (_core.Grid[c, r] == -1) { full = false; break; }
             if (full) _core.Grid[c, rng.Next(height)] = -1;
+        }
+
+        // ==== PENGAMAN 2: jangan sampai LANGSUNG game over ====
+        // Pastikan minimal satu potongan tray masih muat di suatu tempat. Kalau tidak,
+        // kosongkan sel terisi acak sampai ada ruang (bounded, pasti berhenti).
+        int guard = 0;
+        int maxSteps = columns * height + 1;
+        while (!AnyTrayFits() && guard++ < maxSteps)
+        {
+            _core.Grid[rng.Next(columns), rng.Next(height)] = -1;
+        }
+    }
+
+    // Pola "pasangan": 2 blok yang MENYATU serong KE ATAS, yaitu (c,r) + (c+1,r+1),
+    // tersebar acak di seluruh tabung. Warna tiap pasangan sama.
+    void FillDiagonalPairs(System.Random rng)
+    {
+        float chance = Mathf.Clamp01(startFillChance);
+        for (int c = 0; c < columns; c++)
+        {
+            for (int r = 0; r < height - 1; r++)
+            {
+                if (_core.Grid[c, r] != -1) continue;                 // sel awal sudah terisi
+                if (rng.NextDouble() > chance * 0.6) continue;        // jarangkan biar tak terlalu padat
+                int c2 = _core.Wrap(c + 1);
+                if (_core.Grid[c2, r + 1] != -1) continue;            // sel diagonal sudah terisi
+                int color = startRandomColors ? rng.Next(numColors) : (c % numColors);
+                _core.Grid[c, r] = color;
+                _core.Grid[c2, r + 1] = color;                        // pasangan serong ke atas
+            }
         }
     }
 
@@ -531,5 +563,14 @@ public class BlastGame : MonoBehaviour
                 _core.Grid[c, r] = color;
             }
         }
+    }
+
+    // Cek: apakah ada potongan tray yang masih bisa ditaruh di grid saat ini?
+    bool AnyTrayFits()
+    {
+        if (_core == null || _core.Tray == null) return true;
+        foreach (var p in _core.Tray)
+            if (p != null && !p.Used && _core.CanPlaceAnywhere(p)) return true;
+        return false;
     }
 }
