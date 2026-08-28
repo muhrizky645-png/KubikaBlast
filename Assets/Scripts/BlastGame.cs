@@ -5,11 +5,6 @@ using KubikaBlast;
 
 /// <summary>
 /// Render TABUNG 3D gaya gulungan kabel + kubus dari BlastCore.
-/// Tahap 2: render statis. Tahap 3: hook untuk BlastInput. Tahap 4: efek clear
-/// + Restart (Rebuild) dipakai oleh BlastUI. Tahap 5: clear BERURUTAN satu-per-satu.
-///
-/// Tempel ke GameObject kosong (mis. "Game"), lalu tambahkan juga komponen
-/// BlastInput (kontrol) dan BlastUI (antarmuka) agar game utuh.
 /// </summary>
 public class BlastGame : MonoBehaviour
 {
@@ -19,47 +14,36 @@ public class BlastGame : MonoBehaviour
     public int numColors = 5;
 
     [Header("Dimensi sel/kubus")]
-    public float cellWidth = 1f;    // lebar sel di keliling tabung
-    public float cellHeight = 1f;   // tinggi sel
-    public float blockDepth = 0.6f; // ketebalan kubus (arah radial)
-    public float gap = 0.92f;       // <1 supaya ada celah antar kubus
+    public float cellWidth = 1f;
+    public float cellHeight = 1f;
+    public float blockDepth = 0.6f;
+    public float gap = 0.92f;
 
     [Header("Flange (gulungan kabel)")]
-    public float flangeMargin = 0.4f;       // seberapa flange melebihi cincin blok
+    public float flangeMargin = 0.4f;
     public float flangeThickness = 0.3f;
-    // Drum dibuat mepet ke SISI DALAM blok, disisakan celah drumGap biar tak nyentuh.
-    // Makin kecil drumGap -> drum makin mepet ke blok. 0 = menyentuh (hindari).
     public float drumGap = 0.08f;
     public bool showAxle = true;
 
     [Header("Kamera (auto-fit, di-frame SEKALI saja)")]
-    public bool autoCamera = true;          // UNCHECK untuk pakai kamera manualmu (tak akan disentuh)
-    // FOV vertikal kamera. Kecil (mis. 30-35) = perspektif lebih FLAT/seragam (ala Block Blast),
-    // auto-fit otomatis memundurkan kamera biar tabung tetap muat. Besar = lebih "lebar"/melengkung.
+    public bool autoCamera = true;
     public float cameraFov = 35f;
-    public float cameraZoomOut = 1.25f;     // >1 = kamera mundur (zoom-out). Naikkan kalau mau lebih jauh.
-    public float cameraTilt = 6f;           // derajat kamera menunduk (0 = lurus dari samping)
-    public float cameraAimHeight = 0.45f;   // 0=dasar tabung, 1=puncak; titik yang dibidik kamera
+    public float cameraZoomOut = 1.25f;
+    public float cameraTilt = 6f;
+    public float cameraAimHeight = 0.45f;
 
-    [Header("Efek clear (Tahap 4 + 5)")]
-    public bool enableClearFx = true;       // percikan kubus saat baris/kolom hancur
+    [Header("Efek clear")]
+    public bool enableClearFx = true;
     public float clearFxDuration = 0.4f;
-    // Jeda antar sel saat hancur BERURUTAN satu-per-satu (gaya Tetris3D).
-    // 0 = serempak (semua sekaligus). ~0.05-0.08 = gelombang halus.
     public float clearStepDelay = 0.06f;
 
     [Header("Debug")]
-    public bool demoFill = false;           // isi grid contoh (dulu Tahap 2). Default OFF.
+    public bool demoFill = false;
 
     [Header("Blok default saat mulai (starting fill)")]
-    // Isi tabung dengan POLA blok bawaan SETIAP kali mulai / Restart.
-    // Blok tersebar RATA di seluruh tabung (bukan menumpuk dari bawah), ala Block Blast.
     public bool startWithBlocks = true;
-    // Kepadatan isian untuk pola "scatter" (0..1). 0.45 = kira-kira 45% sel terisi.
     [Range(0f, 1f)] public float startFillChance = 0.45f;
-    // true = warna acak; false = warna mengikuti kolom (pola pelangi rapi).
     public bool startRandomColors = true;
-    // 0 = pola acak & BERUBAH tiap masuk game. Selain 0 = pola TETAP (reproducible).
     public int startSeed = 0;
 
     public Color[] palette;
@@ -69,28 +53,21 @@ public class BlastGame : MonoBehaviour
     Transform _blocksRoot;
     Mesh _mesh;
     Material[] _mats;
-    bool _cameraFramed;   // supaya kamera hanya diatur SEKALI (tidak reset tiap Rebuild)
+    bool _cameraFramed;
 
-    // ===== Hook publik untuk BlastInput (Tahap 3) =====
-    public BlastCore Core => _core;   // logika inti (grid, tray, skor)
-    public float Radius => _radius;   // radius cincin blok (dipakai raycast)
-    public Mesh CellMesh => _mesh;    // mesh kubus membulat (dipakai ghost)
+    // ===== Hook publik untuk BlastInput =====
+    public BlastCore Core => _core;
+    public float Radius => _radius;
+    public Mesh CellMesh => _mesh;
 
     void Start()
     {
         Rebuild();
     }
 
-    /// <summary>
-    /// Bangun ulang seluruh tabung + isi (juga dipakai sebagai RESTART oleh BlastUI).
-    /// Bisa dipanggil MANUAL: klik kanan komponen "Blast Game" di Inspector
-    /// lalu pilih "Rebuild Tabung" untuk lihat perubahan TANPA Play.
-    /// Kamera TIDAK ikut di-reset saat Rebuild (lihat _cameraFramed).
-    /// </summary>
     [ContextMenu("Rebuild Tabung")]
     public void Rebuild()
     {
-        // hapus anak lama (Reel + Blocks + Ghost + Fx) supaya tidak dobel
         for (int i = transform.childCount - 1; i >= 0; i--)
         {
             var ch = transform.GetChild(i).gameObject;
@@ -98,7 +75,6 @@ public class BlastGame : MonoBehaviour
             else DestroyImmediate(ch);
         }
 
-        // radius cincin blok dihitung supaya keliling = columns * cellWidth
         _radius = columns * cellWidth / (2f * Mathf.PI);
         _core = new BlastCore(columns, height, numColors);
         _mesh = RoundedCube.Shared();
@@ -106,15 +82,16 @@ public class BlastGame : MonoBehaviour
         BuildPalette();
         BuildReel();
 
-        // Kamera diatur SEKALI saja (frame pertama), supaya tak reset tiap Rebuild.
         if (autoCamera && !_cameraFramed) { SetupCamera(); _cameraFramed = true; }
 
-        if (demoFill) DemoFill();                  // hanya untuk debug; default OFF di Tahap 3
-        else if (startWithBlocks) StartingFill();  // pola blok bawaan tiap mulai / Restart
+        if (demoFill) DemoFill();
+        else if (startWithBlocks) StartingFill();
+        // SMART DROP: setelah papan terisi, carve ulang tray dari CELAH NYATA di papan
+        // supaya tiap potongan dijamin punya slot pas (solusi tersembunyi).
+        _core.RegenerateTray();
         RenderGrid();
     }
 
-    /// <summary>Paksa atur ulang kamera auto-fit (mis. setelah ganti ukuran papan / posisi tabung).</summary>
     [ContextMenu("Frame Camera (auto-fit sekali)")]
     public void FrameCameraNow()
     {
@@ -122,9 +99,6 @@ public class BlastGame : MonoBehaviour
         _cameraFramed = true;
     }
 
-    // ===== Pemetaan sel -> ruang LOKAL tabung (bagian 9.1 konsep) =====
-    // NB: mengembalikan koordinat LOKAL (relatif ke transform BlastGame) supaya
-    // blok & ghost ikut berputar saat tabung diputar.
     public Vector3 CellToWorld(int c, int r)
     {
         float ang = (float)c / columns * Mathf.PI * 2f;
@@ -141,16 +115,12 @@ public class BlastGame : MonoBehaviour
         return Quaternion.LookRotation(outward, Vector3.up);
     }
 
-    // ===== Bangun tabung gaya gulungan kabel =====
     void BuildReel()
     {
         float totalH = height * cellHeight;
         var reel = new GameObject("Reel").transform;
         reel.SetParent(transform, false);
 
-        // Drum (spool dalam). Dibuat MEPET ke sisi dalam blok:
-        //   sisi dalam blok = _radius - blockDepth/2
-        //   radius drum     = sisi dalam blok - drumGap  (celah kecil biar tak nyentuh)
         float blockInner = _radius - blockDepth * 0.5f;
         float drumR = Mathf.Max(0.05f, blockInner - drumGap);
         var drum = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
@@ -160,14 +130,10 @@ public class BlastGame : MonoBehaviour
         drum.transform.localPosition = new Vector3(0, totalH / 2f, 0);
         Paint(drum, new Color(0.25f, 0.27f, 0.32f));
 
-        // Flange atas & bawah (piringan). Digeser KELUAR setengah tebalnya supaya
-        // permukaan DALAM flange pas di ujung tumpukan blok (y=0 & y=totalH),
-        // sehingga TIDAK memotong blok baris paling bawah/atas.
         float flangeR = _radius + flangeMargin;
         CreateDisc("FlangeBawah", reel, -flangeThickness * 0.5f, flangeR);
         CreateDisc("FlangeAtas", reel, totalH + flangeThickness * 0.5f, flangeR);
 
-        // Poros/as opsional (di tengah drum)
         if (showAxle)
         {
             var axle = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
@@ -192,10 +158,9 @@ public class BlastGame : MonoBehaviour
         disc.transform.SetParent(parent, false);
         disc.transform.localScale = new Vector3(discRadius * 2f, flangeThickness / 2f, discRadius * 2f);
         disc.transform.localPosition = new Vector3(0, y, 0);
-        Paint(disc, new Color(0.30f, 0.22f, 0.15f)); // warna kayu
+        Paint(disc, new Color(0.30f, 0.22f, 0.15f));
     }
 
-    // ===== Render isi grid jadi kubus =====
     public void RenderGrid()
     {
         for (int i = _blocksRoot.childCount - 1; i >= 0; i--)
@@ -214,15 +179,12 @@ public class BlastGame : MonoBehaviour
             }
     }
 
-    /// <summary>Dipanggil BlastInput: taruh potongan tray lalu render ulang + efek clear.</summary>
     public bool TryPlace(int trayIndex, int col, int row)
     {
         if (_core == null) return false;
         bool ok = _core.PlacePiece(trayIndex, col, row);
         if (ok)
         {
-            // Ambil laporan clear SEBELUM RenderGrid (grid sudah dikosongkan oleh core,
-            // tapi LastClear.Cells menyimpan warna aslinya untuk efek).
             if (enableClearFx) SpawnClearEffect(_core.LastClear);
             RenderGrid();
         }
@@ -233,7 +195,6 @@ public class BlastGame : MonoBehaviour
     {
         var go = new GameObject($"Block_{c}_{r}");
         go.transform.SetParent(_blocksRoot, false);
-        // LOKAL supaya ikut berputar bersama tabung
         go.transform.localPosition = CellToWorld(c, r);
         go.transform.localRotation = CellRotation(c);
         go.transform.localScale = new Vector3(cellWidth * gap, cellHeight * gap, blockDepth);
@@ -244,17 +205,11 @@ public class BlastGame : MonoBehaviour
         mr.sharedMaterial = _mats[color % _mats.Length];
     }
 
-    // ===== Efek "blast" saat baris/kolom hancur (Tahap 4 + 5) =====
-    // Tahap 5: hancur BERURUTAN satu-per-satu. Semua kubus Fx dibuat DULU
-    // (menggantikan blok yang baru hilang supaya papan tak langsung kosong),
-    // lalu animasi hancurnya dimulai SATU PER SATU dengan jeda clearStepDelay.
-    // Urutan: baris bawah->atas, dalam satu baris kiri->kanan (keliling).
     void SpawnClearEffect(BlastCore.ClearInfo clear)
     {
         if (!Application.isPlaying) return;
         if (clear.Cells == null || clear.Cells.Count == 0) return;
 
-        // Snapshot data (c,r,color) supaya aman walau LastClear berubah nanti.
         int n = clear.Cells.Count;
         var cc = new int[n];
         var rr = new int[n];
@@ -266,12 +221,10 @@ public class BlastGame : MonoBehaviour
             colr[i] = clear.Cells[i].color;
         }
 
-        // urutan hancur: baris bawah->atas, dalam baris kiri->kanan (keliling).
         var order = new List<int>(n);
         for (int i = 0; i < n; i++) order.Add(i);
         order.Sort((x, y) => rr[x] != rr[y] ? rr[x].CompareTo(rr[y]) : cc[x].CompareTo(cc[y]));
 
-        // Spawn SEMUA kubus Fx sekarang (statis dulu), lalu animasikan berurutan.
         var gos = new List<GameObject>(n);
         var mrs = new List<MeshRenderer>(n);
         var mats = new List<Material>(n);
@@ -279,7 +232,7 @@ public class BlastGame : MonoBehaviour
         {
             int i = order[k];
             var go = new GameObject("Fx");
-            go.transform.SetParent(transform, false);        // anak Game -> ikut rotasi tabung
+            go.transform.SetParent(transform, false);
             go.transform.localPosition = CellToWorld(cc[i], rr[i]);
             go.transform.localRotation = CellRotation(cc[i]);
             go.transform.localScale = new Vector3(cellWidth * gap, cellHeight * gap, blockDepth);
@@ -314,12 +267,12 @@ public class BlastGame : MonoBehaviour
         Vector3 s0 = go.transform.localScale;
         Vector3 s1 = s0 * 1.7f;
         Vector3 startPos = go.transform.localPosition;
-        Vector3 outward = go.transform.localRotation * Vector3.forward; // radial keluar
+        Vector3 outward = go.transform.localRotation * Vector3.forward;
         Color c0 = mat.HasProperty("_BaseColor") ? mat.GetColor("_BaseColor") : mat.color;
 
         while (t < dur)
         {
-            if (go == null) yield break; // ke-destroy oleh Rebuild/restart
+            if (go == null) yield break;
             float k = t / dur;
             go.transform.localScale = Vector3.Lerp(s0, s1, k);
             go.transform.localPosition = startPos + outward * (k * 0.6f);
@@ -338,7 +291,7 @@ public class BlastGame : MonoBehaviour
         if (shader == null) shader = Shader.Find("Standard");
         var m = new Material(shader);
 
-        if (m.HasProperty("_Surface")) m.SetFloat("_Surface", 1f); // transparan
+        if (m.HasProperty("_Surface")) m.SetFloat("_Surface", 1f);
         m.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
         m.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
         m.SetInt("_ZWrite", 0);
@@ -354,53 +307,45 @@ public class BlastGame : MonoBehaviour
         return m;
     }
 
-    // ===== Kamera AUTO-FIT + view fixed (menunduk dari depan-atas) =====
-    // Membidik POSISI TABUNG SEBENARNYA (transform.position), bukan titik nol dunia,
-    // supaya selalu center walau GameObject Game tidak di (0,0,0).
-    // Memperhitungkan FOV + rasio layar. Dipanggil SEKALI.
     void SetupCamera()
     {
         var cam = Camera.main;
         if (cam == null) return;
 
-        // Pakai FOV yang kita tentukan -> perspektif konsisten & bisa dibikin flat.
         cam.fieldOfView = Mathf.Clamp(cameraFov, 5f, 120f);
 
         float totalH = height * cellHeight;
-        Vector3 basePos = transform.position; // posisi dunia tabung (dasar tabung)
+        Vector3 basePos = transform.position;
         float aimY = totalH * Mathf.Clamp01(cameraAimHeight);
-        Vector3 target = new Vector3(basePos.x, basePos.y + aimY, basePos.z); // titik yang dibidik
+        Vector3 target = new Vector3(basePos.x, basePos.y + aimY, basePos.z);
 
-        // setengah-ukuran tabung yang harus muat di layar
-        float halfH = totalH / 2f + flangeThickness;   // arah tinggi
-        float halfW = _radius + flangeMargin;          // arah lebar (radius luar)
+        float halfH = totalH / 2f + flangeThickness;
+        float halfW = _radius + flangeMargin;
 
         float tanV = Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad);
-        float aspect = Mathf.Max(0.0001f, cam.aspect); // lebar / tinggi
+        float aspect = Mathf.Max(0.0001f, cam.aspect);
         float tanH = tanV * aspect;
 
         float distForHeight = halfH / Mathf.Max(0.0001f, tanV);
         float distForWidth = halfW / Mathf.Max(0.0001f, tanH);
         float dist = Mathf.Max(distForHeight, distForWidth) * Mathf.Max(0.1f, cameraZoomOut);
 
-        // posisi kamera: mundur di -Z lalu naik sesuai sudut tunduk (tilt)
         float rad = cameraTilt * Mathf.Deg2Rad;
         Vector3 offset = new Vector3(0f, Mathf.Sin(rad) * dist, -Mathf.Cos(rad) * dist);
         cam.transform.position = target + offset;
         cam.transform.LookAt(target);
     }
 
-    // ===== Util warna & material =====
     void BuildPalette()
     {
         if (palette == null || palette.Length == 0)
             palette = new Color[]
             {
-                new Color(0.95f, 0.30f, 0.30f), // merah
-                new Color(0.30f, 0.65f, 0.95f), // biru
-                new Color(0.40f, 0.85f, 0.45f), // hijau
-                new Color(0.98f, 0.80f, 0.25f), // kuning
-                new Color(0.70f, 0.45f, 0.90f), // ungu
+                new Color(0.95f, 0.30f, 0.30f),
+                new Color(0.30f, 0.65f, 0.95f),
+                new Color(0.40f, 0.85f, 0.45f),
+                new Color(0.98f, 0.80f, 0.25f),
+                new Color(0.70f, 0.45f, 0.90f),
             };
 
         var shader = Shader.Find("Universal Render Pipeline/Lit");
@@ -424,7 +369,6 @@ public class BlastGame : MonoBehaviour
         if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", col);
         m.color = col;
         go.GetComponent<MeshRenderer>().sharedMaterial = m;
-        // buang collider default cylinder (raycast tabung dihitung matematis, tak perlu collider)
         var cc = go.GetComponent<Collider>();
         if (cc != null)
         {
@@ -433,7 +377,6 @@ public class BlastGame : MonoBehaviour
         }
     }
 
-    // ===== Isi contoh untuk debug (dulu Tahap 2). Aktifkan lewat toggle demoFill. =====
     void DemoFill()
     {
         for (int c = 0; c < columns; c++) _core.Grid[c, 0] = c % numColors;
@@ -441,23 +384,16 @@ public class BlastGame : MonoBehaviour
         for (int r = 0; r < 4; r++) _core.Grid[3, r] = 2;
     }
 
-    // ===== Blok DEFAULT saat mulai / Restart = POLA acak flat (ala Block Blast) =====
-    // Mengisi SELURUH tabung (bukan menumpuk dari bawah) dengan salah satu POLA yang
-    // dipilih ACAK tiap mulai game -> tampilan selalu berbeda & menarik.
-    // Dijaga agar TIDAK memicu clear otomatis (tak ada cincin/kolom penuh) DAN
-    // TIDAK langsung game over (minimal satu potongan tray harus muat).
     void StartingFill()
     {
         if (numColors <= 0) return;
 
         var rng = startSeed != 0 ? new System.Random(startSeed) : new System.Random();
 
-        // pastikan bersih dulu
         for (int c = 0; c < columns; c++)
             for (int r = 0; r < height; r++)
                 _core.Grid[c, r] = -1;
 
-        // pilih pola acak -> tiap masuk game beda (kalau startSeed = 0)
         int pattern = rng.Next(7);
         float chance = Mathf.Clamp01(startFillChance);
 
@@ -468,28 +404,28 @@ public class BlastGame : MonoBehaviour
                 bool fill = false;
                 switch (pattern)
                 {
-                    case 0: // scatter flat (blok tersebar di mana saja)
+                    case 0:
                         fill = rng.NextDouble() <= chance;
                         break;
-                    case 1: // garis vertikal (kolom selang-seling)
+                    case 1:
                         fill = (c % 2 == 0) && rng.NextDouble() <= 0.85;
                         break;
-                    case 2: // pita horizontal (baris selang-seling)
+                    case 2:
                         fill = (r % 2 == 0) && rng.NextDouble() <= 0.85;
                         break;
-                    case 3: // pasangan 2 blok SERONG ke atas (diisi terpisah di bawah)
+                    case 3:
                         fill = false;
                         break;
-                    case 4: // diagonal melingkar di tabung
+                    case 4:
                         fill = ((c + r) % 3 == 0);
                         break;
-                    case 5: // gelombang sinus (naik-turun keliling tabung)
+                    case 5:
                     {
                         float wave = (Mathf.Sin((float)c / columns * Mathf.PI * 4f) * 0.5f + 0.5f) * (height - 1);
                         fill = Mathf.Abs(r - wave) <= 1.2f;
                         break;
                     }
-                    default: // 6: gumpalan/cluster acak (diisi terpisah di bawah)
+                    default:
                         fill = false;
                         break;
                 }
@@ -501,7 +437,6 @@ public class BlastGame : MonoBehaviour
         if (pattern == 6) FillClusters(rng);
         else if (pattern == 3) FillDiagonalPairs(rng);
 
-        // ==== PENGAMAN 1: jangan sampai ada cincin/kolom PENUH (biar tak auto-clear) ====
         for (int r = 0; r < height; r++)
         {
             bool full = true;
@@ -515,9 +450,6 @@ public class BlastGame : MonoBehaviour
             if (full) _core.Grid[c, rng.Next(height)] = -1;
         }
 
-        // ==== PENGAMAN 2: jangan sampai LANGSUNG game over ====
-        // Pastikan minimal satu potongan tray masih muat di suatu tempat. Kalau tidak,
-        // kosongkan sel terisi acak sampai ada ruang (bounded, pasti berhenti).
         int guard = 0;
         int maxSteps = columns * height + 1;
         while (!AnyTrayFits() && guard++ < maxSteps)
@@ -526,8 +458,6 @@ public class BlastGame : MonoBehaviour
         }
     }
 
-    // Pola "pasangan": 2 blok yang MENYATU serong KE ATAS, yaitu (c,r) + (c+1,r+1),
-    // tersebar acak di seluruh tabung. Warna tiap pasangan sama.
     void FillDiagonalPairs(System.Random rng)
     {
         float chance = Mathf.Clamp01(startFillChance);
@@ -535,18 +465,17 @@ public class BlastGame : MonoBehaviour
         {
             for (int r = 0; r < height - 1; r++)
             {
-                if (_core.Grid[c, r] != -1) continue;                 // sel awal sudah terisi
-                if (rng.NextDouble() > chance * 0.6) continue;        // jarangkan biar tak terlalu padat
+                if (_core.Grid[c, r] != -1) continue;
+                if (rng.NextDouble() > chance * 0.6) continue;
                 int c2 = _core.Wrap(c + 1);
-                if (_core.Grid[c2, r + 1] != -1) continue;            // sel diagonal sudah terisi
+                if (_core.Grid[c2, r + 1] != -1) continue;
                 int color = startRandomColors ? rng.Next(numColors) : (c % numColors);
                 _core.Grid[c, r] = color;
-                _core.Grid[c2, r + 1] = color;                        // pasangan serong ke atas
+                _core.Grid[c2, r + 1] = color;
             }
         }
     }
 
-    // Pola "cluster": beberapa gumpalan blok kecil tersebar acak di seluruh tabung.
     void FillClusters(System.Random rng)
     {
         int blobs = Mathf.Max(3, (columns * height) / 20);
@@ -565,7 +494,6 @@ public class BlastGame : MonoBehaviour
         }
     }
 
-    // Cek: apakah ada potongan tray yang masih bisa ditaruh di grid saat ini?
     bool AnyTrayFits()
     {
         if (_core == null || _core.Tray == null) return true;
