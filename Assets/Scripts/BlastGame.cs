@@ -148,10 +148,12 @@ public class BlastGame : MonoBehaviour
         drum.transform.localPosition = new Vector3(0, totalH / 2f, 0);
         Paint(drum, new Color(0.25f, 0.27f, 0.32f));
 
-        // Flange atas & bawah (piringan)
+        // Flange atas & bawah (piringan). Digeser KELUAR setengah tebalnya supaya
+        // permukaan DALAM flange pas di ujung tumpukan blok (y=0 & y=totalH),
+        // sehingga TIDAK memotong blok baris paling bawah/atas.
         float flangeR = _radius + flangeMargin;
-        CreateDisc("FlangeBawah", reel, 0f, flangeR);
-        CreateDisc("FlangeAtas", reel, totalH, flangeR);
+        CreateDisc("FlangeBawah", reel, -flangeThickness * 0.5f, flangeR);
+        CreateDisc("FlangeAtas", reel, totalH + flangeThickness * 0.5f, flangeR);
 
         // Poros/as opsional (di tengah drum)
         if (showAxle)
