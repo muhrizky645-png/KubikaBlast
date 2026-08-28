@@ -1,6 +1,6 @@
 // Dukung DUA backend input Unity: Input Manager (lama) & Input System (baru).
 // Kalau project cuma pakai Input System baru (default Unity 6 URP), branch
-// USE_NEW_INPUT yang dipakai. Kalau ada Input Manager lama (atau "Both"),
+// USE_NEW_INPUT yang dipakai. Kalau ada Input Manager lama (atau \"Both\"),
 // pakai API lama. Jadi script ini jalan tanpa perlu ubah Player Settings.
 #if ENABLE_INPUT_SYSTEM && !ENABLE_LEGACY_INPUT_MANAGER
 #define USE_NEW_INPUT
@@ -15,19 +15,20 @@ using KubikaBlast;
 
 /// <summary>
 /// TAHAP 3 + 4 — Input, drag-drop, & preview-clear ala Block Blast.
-/// Tempel komponen ini ke GameObject "Game" yang SAMA dengan BlastGame.
+/// Tempel komponen ini ke GameObject \"Game\" yang SAMA dengan BlastGame.
 ///
 /// PENTING: DefaultExecutionOrder > 0 supaya BlastGame.Start() (Rebuild yang
 /// menghapus semua anak Game) jalan LEBIH DULU daripada BlastInput.Start().
 /// Ghost & preview root juga dibuat ulang otomatis kalau hilang (setelah Rebuild).
 ///
-/// MODEL MURNI SERET (HP):
-///  1. Pilih potongan tray (tap slot UI / tombol 1-2-3 / TAB).
-///  2. TEKAN & SERET jari di tabung. Ghost muncul HANYA setelah jari BERGERAK
-///     melewati dragThreshold. Tap/pencet diam TIDAK menaruh apa pun.
-///  3. Kalau posisi seret membuat cincin/kolom PENUH -> sel-sel yang akan hancur
+/// MODEL MURNI SERET-DARI-TRAY (HP) ala Block Blast:
+///  1. TEKAN jari TEPAT di potongan tray yang diinginkan (BUKAN di tabung).
+///  2. Tanpa melepas, SERET jari ke tabung. Ghost mengikuti sel di bawah jari.
+///  3. Kalau posisi seret membuat cincin/kolom PENUH -> sel yang akan hancur
 ///     ikut MENYALA (preview clear ala Block Blast).
-///  4. LEPAS jari di sel valid -> potongan ditaruh. Seret keluar tabung = batal.
+///  4. LEPAS jari di sel valid -> potongan ditaruh. Lepas di luar tabung = batal.
+///  * Menekan/menyeret LANGSUNG di tabung TIDAK menaruh apa pun. Menaruh HANYA
+///    sah lewat gestur seret yang DIMULAI dari slot tray.
 ///
 /// Putar TABUNG: drag KLIK-KANAN / Q-E / panah / DUA JARI.
 /// </summary>
@@ -40,7 +41,7 @@ public class BlastInput : MonoBehaviour
     public float dragRotateSpeed = 0.3f;  // derajat / pixel (drag klik-kanan atau 2 jari)
 
     [Header("Perilaku ghost / drag")]
-    // true (HP): ghost hanya muncul saat MENYERET. false (mouse): preview saat hover.
+    // true (HP): menaruh HANYA lewat seret DARI slot tray. false (mouse): preview saat hover.
     public bool ghostOnlyWhileDragging = true;
     // Jarak minimal (pixel) jari harus bergerak agar dihitung MENYERET, bukan tap.
     public float dragThreshold = 12f;
@@ -72,6 +73,9 @@ public class BlastInput : MonoBehaviour
     // deteksi seret: posisi saat mulai menekan + apakah sudah dihitung menyeret
     Vector2 _pressStartPos;
     bool _isDragging;
+    // true HANYA jika gestur menekan ini DIMULAI tepat di atas slot tray.
+    // Inilah gerbang \"seret-dari-tray\": menekan tabung -> false -> tak bisa menaruh.
+    bool _dragFromTray;
 
     // target terakhir saat menyeret -> dipakai untuk menaruh saat jari dilepas
     int _lastCol, _lastRow;
@@ -120,21 +124,27 @@ public class BlastInput : MonoBehaviour
         bool multi = MultiTouchActive();   // 2 jari = gestur putar, bukan menaruh
         bool held = PointerHeld();         // jari/klik-kiri sedang menekan?
 
-        // ---- deteksi SERET sungguhan (bukan tap) ----
+        // ---- MULAI gestur: hanya sah kalau DIMULAI di slot tray ----
         if (PointerPressedThisFrame())
         {
             _pressStartPos = PointerPosition();
             _isDragging = false;
+            int slot = BlastUI.TraySlotAtPointer(_pressStartPos);
+            if (slot >= 0) { TrySelect(slot); _dragFromTray = true; }  // \"angkat\" potongan dari tray
+            else _dragFromTray = false;                                 // tekan tabung/lainnya -> tak bisa menaruh
         }
+        // deteksi seret sungguhan (bukan tap): jari sudah bergerak cukup jauh?
         if (held && !_isDragging &&
             (PointerPosition() - _pressStartPos).sqrMagnitude >= dragThreshold * dragThreshold)
         {
-            _isDragging = true; // jari sudah bergerak cukup jauh -> ini menyeret
+            _isDragging = true;
         }
 
-        // Mode HP: harus MENYERET. Mode desktop (hover): selalu preview.
+        // Mode HP: WAJIB menyeret DARI tray. Mode desktop (hover): selalu preview.
+        bool requireTrayDrag = ghostOnlyWhileDragging;
         bool dragging = ghostOnlyWhileDragging ? (held && _isDragging) : true;
-        bool active = piece != null && !core.GameOver && !_rotating && !multi && dragging;
+        bool active = piece != null && !core.GameOver && !_rotating && !multi
+                      && dragging && (!requireTrayDrag || _dragFromTray);
 
         int col = 0, row = 0;
         bool haveCell = false;
@@ -158,11 +168,13 @@ public class BlastInput : MonoBehaviour
             (enableClearPreview && haveCell && canPlace) ? PredictClears(piece, col, row) : null;
         SetClearPreview(clearSet);
 
-        // LEPAS jari/klik -> taruh di sel valid terakhir (HANYA jika benar-benar menyeret).
+        // LEPAS jari/klik -> taruh di sel valid terakhir.
+        // Syarat: gestur DIMULAI di tray (_dragFromTray) DAN benar-benar menyeret.
         if (PointerReleased() && !_rotating && !multi)
         {
             bool draggedEnough = !ghostOnlyWhileDragging || _isDragging;
-            if (draggedEnough && _hasLast && _lastCanPlace && piece != null
+            bool trayOk = !requireTrayDrag || _dragFromTray;
+            if (draggedEnough && trayOk && _hasLast && _lastCanPlace && piece != null
                 && !BlastUI.PointerBlocksPlacement(PointerPosition()))
             {
                 if (_game.TryPlace(_current, _lastCol, _lastRow))
@@ -175,7 +187,8 @@ public class BlastInput : MonoBehaviour
                 }
             }
             _hasLast = false;
-            _isDragging = false; // reset untuk gestur berikutnya
+            _isDragging = false;   // reset untuk gestur berikutnya
+            _dragFromTray = false; // gerbang tray ditutup lagi
             SetClearPreview(null);
         }
     }
@@ -235,7 +248,7 @@ public class BlastInput : MonoBehaviour
             g.SetActive(true);
             g.transform.localPosition = _game.CellToWorld(c, r);
             g.transform.localRotation = _game.CellRotation(c);
-            // sedikit lebih besar dari blok supaya "membungkus" -> efek menyala.
+            // sedikit lebih besar dari blok supaya \"membungkus\" -> efek menyala.
             g.transform.localScale = new Vector3(_game.cellWidth * _game.gap * 1.06f,
                                                  _game.cellHeight * _game.gap * 1.06f,
                                                  _game.blockDepth * 1.14f);

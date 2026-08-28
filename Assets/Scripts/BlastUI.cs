@@ -17,9 +17,9 @@ using KubikaBlast;
 ///  - Panel skor, combo, dan jumlah baris hancur (atas layar).
 ///  - Tampilan TRAY 3 potongan (bentuknya digambar dari Piece.Cells). Tap slot
 ///    untuk memilih potongan aktif.
-///  - Layar GAME OVER + tombol "MAIN LAGI" (memanggil BlastGame.Rebuild()).
+///  - Layar GAME OVER + tombol \"MAIN LAGI\" (memanggil BlastGame.Rebuild()).
 ///
-/// Cara pakai: buat GameObject kosong (mis. "UI") lalu tambahkan komponen ini.
+/// Cara pakai: buat GameObject kosong (mis. \"UI\") lalu tambahkan komponen ini.
 /// Referensi BlastGame & BlastInput dicari otomatis. Interaksi (tap) ditangani
 /// manual pakai abstraksi input, jadi TIDAK butuh EventSystem.
 /// </summary>
@@ -271,6 +271,25 @@ public class BlastUI : MonoBehaviour
 
     public static bool PointerBlocksPlacement(Vector2 screenPos)
         => Instance != null && Instance.IsOverInteractiveUI(screenPos);
+
+    // Slot tray (0-2) berisi potongan BELUM terpakai pada posisi layar ini,
+    // atau -1 kalau tidak ada. Dipakai BlastInput untuk model "seret DARI tray":
+    // menaruh hanya sah bila gestur seret DIMULAI di salah satu slot ini.
+    public int TraySlotAt(Vector2 screenPos)
+    {
+        if (game == null) return -1;
+        var core = game.Core;
+        if (core == null || core.GameOver) return -1;
+        for (int i = 0; i < 3; i++)
+        {
+            var pc = core.Tray[i];
+            if (pc != null && !pc.Used && Contains(_slot[i], screenPos)) return i;
+        }
+        return -1;
+    }
+
+    public static int TraySlotAtPointer(Vector2 screenPos)
+        => Instance != null ? Instance.TraySlotAt(screenPos) : -1;
 
     // ==================================================================
     // ============ HELPER UI ===========================================
