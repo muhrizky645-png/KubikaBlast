@@ -24,8 +24,9 @@ using KubikaBlast;
 /// MODEL MURNI SERET-DARI-TRAY (HP) ala Block Blast:
 ///  1. TEKAN jari TEPAT di potongan tray yang diinginkan (BUKAN di tabung).
 ///  2. Tanpa melepas, SERET jari ke tabung. Selama menyeret, potongan tampak
-///     "MELAYANG" mengikuti jari. Ghost di tabung HANYA muncul saat posisi PAS
-///     (valid); kalau belum pas, hanya blok melayang yang terlihat.
+///     "MELAYANG" sebagai OVERLAY di permukaan layar (mengikuti jari, rata,
+///     menghadap kamera — bukan objek 3D yang berdiri di dunia). Ghost di
+///     tabung HANYA muncul saat posisi PAS (valid).
 ///  3. Kalau posisi seret membuat cincin/kolom PENUH -> sel yang akan hancur
 ///     ikut MENYALA (preview clear ala Block Blast).
 ///  4. LEPAS jari di sel valid -> potongan ditaruh. Lepas di luar tabung = batal.
@@ -59,13 +60,16 @@ public class BlastInput : MonoBehaviour
     // Warna nyala untuk sel yang AKAN hancur (baris/kolom penuh).
     public Color clearPreviewColor = new Color(1f, 0.95f, 0.35f, 0.55f);
 
-    [Header("Blok melayang saat diseret (poin 1)")]
-    // Saat menyeret dari tray, potongan tampak MELAYANG mengikuti jari.
+    [Header("Blok melayang saat diseret (poin 1) - OVERLAY LAYAR")]
+    // Blok melayang digambar seperti menempel di PERMUKAAN LAYAR (overlay),
+    // bukan objek 3D yang berdiri di dunia. Selalu menghadap kamera & rata.
     public bool enableHeldPiece = true;
     // Offset ke ATAS (pixel) supaya blok melayang di atas jari, tak ketutup jari.
     public float heldScreenYOffset = 90f;
-    // Skala blok melayang relatif ukuran sel (1 = sama seperti blok tabung).
-    public float heldScale = 1f;
+    // Ukuran satu sel blok melayang di LAYAR (pixel).
+    public float heldPixelSize = 90f;
+    // Jarak overlay dari kamera (unit dunia). Kecil = terasa menempel di layar.
+    public float heldDepth = 2f;
 
     BlastGame _game;
     Camera _cam;
@@ -180,7 +184,7 @@ public class BlastInput : MonoBehaviour
 
         // Ghost HANYA muncul saat posisi PAS (valid). Selain itu, cukup blok melayang.
         SetGhost(haveCell && canPlace, piece, col, row, canPlace);
-        // Poin 1: blok melayang mengikuti jari selama menyeret dari tray.
+        // Poin 1: blok melayang (overlay layar) mengikuti jari selama menyeret dari tray.
         SetHeldPiece(enableHeldPiece && active, piece);
 
         // ---- preview CLEAR: sel yang akan hancur menyala ----
@@ -469,7 +473,7 @@ public class BlastInput : MonoBehaviour
         }
     }
 
-    // ================= BLOK MELAYANG (poin 1) =================
+    // ================= BLOK MELAYANG = OVERLAY LAYAR (poin 1) =================
     void EnsureHeldRoot()
     {
         if (_heldRoot != null) return;
@@ -479,6 +483,10 @@ public class BlastInput : MonoBehaviour
         _held.Clear();
     }
 
+    // Gambar potongan seperti OVERLAY yang menempel di permukaan layar:
+    // - Tata letak sel dihitung dalam PIXEL layar (relatif posisi jari).
+    // - Diproyeksikan ke dunia pada kedalaman kecil (heldDepth) di depan kamera.
+    // - Selalu menghadap kamera -> tampak rata, tidak "berdiri" di dunia.
     void SetHeldPiece(bool show, BlastCore.Piece piece)
     {
         EnsureHeldRoot();
@@ -489,31 +497,38 @@ public class BlastInput : MonoBehaviour
             return;
         }
 
-        // Titik dunia di depan kamera, sejajar posisi jari (dengan offset ke ATAS
-        // supaya blok melayang tidak tertutup jari).
-        Vector2 sp = PointerPosition();
-        sp.y += heldScreenYOffset;
-        float depth = Vector3.Distance(
-            _cam.transform.position,
-            _game.transform.position + Vector3.up * (_game.height * _game.cellHeight * 0.5f));
-        Vector3 basePos = _cam.ScreenToWorldPoint(new Vector3(sp.x, sp.y, depth));
+        // Titik acuan di LAYAR (pixel): posisi jari + offset ke atas.
+        Vector2 finger = PointerPosition();
+        finger.y += heldScreenYOffset;
 
-        Vector3 right = _cam.transform.right;
-        Vector3 up = _cam.transform.up;
-        Quaternion rot = _cam.transform.rotation;
-        float step = _game.cellWidth * heldScale;
+        // Pusatkan potongan pada jari (rata-rata offset sel).
+        int len = piece.Cells.Length;
+        float avgX = 0f, avgY = 0f;
+        foreach (var (dx, dy) in piece.Cells) { avgX += dx; avgY += dy; }
+        if (len > 0) { avgX /= len; avgY /= len; }
 
-        EnsureHeld(piece.Cells.Length);
+        // Konversi 1 pixel -> ukuran dunia pada kedalaman heldDepth (perspektif).
+        float d = Mathf.Max(0.05f, heldDepth);
+        float tanV = Mathf.Tan(_cam.fieldOfView * 0.5f * Mathf.Deg2Rad);
+        float worldPerPixel = (2f * d * tanV) / Mathf.Max(1, Screen.height);
+        float cube = heldPixelSize * worldPerPixel; // sisi kubus di dunia (~heldPixelSize px)
+
+        Quaternion rot = _cam.transform.rotation; // menghadap kamera -> tampak rata di layar
+
+        EnsureHeld(len);
         int used = 0;
         foreach (var (dx, dy) in piece.Cells)
         {
+            // posisi sel di LAYAR (pixel), lalu proyeksikan ke dunia di depan kamera.
+            Vector2 sp = finger + new Vector2((dx - avgX) * heldPixelSize,
+                                              (dy - avgY) * heldPixelSize);
+            Vector3 world = _cam.ScreenToWorldPoint(new Vector3(sp.x, sp.y, d));
+
             var g = _held[used++];
             g.SetActive(true);
-            g.transform.position = basePos + right * (dx * step) + up * (dy * step);
+            g.transform.position = world;
             g.transform.rotation = rot;
-            g.transform.localScale = new Vector3(_game.cellWidth * _game.gap * heldScale,
-                                                 _game.cellHeight * _game.gap * heldScale,
-                                                 _game.blockDepth * heldScale);
+            g.transform.localScale = new Vector3(cube * _game.gap, cube * _game.gap, cube * 0.6f);
             g.GetComponent<MeshRenderer>().sharedMaterial = SolidMat(piece.Color);
         }
         for (int i = used; i < _held.Count; i++)
