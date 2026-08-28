@@ -1,13 +1,14 @@
+using System.Collections;
 using UnityEngine;
 using KubikaBlast;
 
 /// <summary>
 /// Render TABUNG 3D gaya gulungan kabel + kubus dari BlastCore.
-/// Tahap 2: render statis. Tahap 3: menyediakan hook untuk BlastInput
-/// (Core, Radius, CellMesh, CellRotation, TryPlace) + dukungan PUTAR TABUNG.
+/// Tahap 2: render statis. Tahap 3: hook untuk BlastInput. Tahap 4: efek clear
+/// + Restart (Rebuild) dipakai oleh BlastUI.
 ///
 /// Tempel ke GameObject kosong (mis. "Game"), lalu tambahkan juga komponen
-/// BlastInput di GameObject yang sama agar bisa dimainkan.
+/// BlastInput (kontrol) dan BlastUI (antarmuka) agar game utuh.
 /// </summary>
 public class BlastGame : MonoBehaviour
 {
@@ -36,6 +37,10 @@ public class BlastGame : MonoBehaviour
     public float cameraTilt = 12f;          // derajat kamera menunduk (0 = lurus dari samping)
     public float cameraAimHeight = 0.45f;   // 0=dasar tabung, 1=puncak; titik yang dibidik kamera
 
+    [Header("Efek clear (Tahap 4)")]
+    public bool enableClearFx = true;       // percikan kubus saat baris/kolom hancur
+    public float clearFxDuration = 0.4f;
+
     [Header("Debug")]
     public bool demoFill = false;           // isi grid contoh (dulu Tahap 2). Default OFF.
 
@@ -59,7 +64,7 @@ public class BlastGame : MonoBehaviour
     }
 
     /// <summary>
-    /// Bangun ulang seluruh tabung + isi.
+    /// Bangun ulang seluruh tabung + isi (juga dipakai sebagai RESTART oleh BlastUI).
     /// Bisa dipanggil MANUAL: klik kanan komponen "Blast Game" di Inspector
     /// lalu pilih "Rebuild Tabung" untuk lihat perubahan TANPA Play.
     /// Kamera TIDAK ikut di-reset saat Rebuild (lihat _cameraFramed).
@@ -67,7 +72,7 @@ public class BlastGame : MonoBehaviour
     [ContextMenu("Rebuild Tabung")]
     public void Rebuild()
     {
-        // hapus anak lama (Reel + Blocks + Ghost) supaya tidak dobel
+        // hapus anak lama (Reel + Blocks + Ghost + Fx) supaya tidak dobel
         for (int i = transform.childCount - 1; i >= 0; i--)
         {
             var ch = transform.GetChild(i).gameObject;
@@ -188,12 +193,18 @@ public class BlastGame : MonoBehaviour
             }
     }
 
-    /// <summary>Dipanggil BlastInput: taruh potongan tray lalu render ulang.</summary>
+    /// <summary>Dipanggil BlastInput: taruh potongan tray lalu render ulang + efek clear.</summary>
     public bool TryPlace(int trayIndex, int col, int row)
     {
         if (_core == null) return false;
         bool ok = _core.PlacePiece(trayIndex, col, row);
-        if (ok) RenderGrid();
+        if (ok)
+        {
+            // Ambil laporan clear SEBELUM RenderGrid (grid sudah dikosongkan oleh core,
+            // tapi LastClear.Cells menyimpan warna aslinya untuk efek).
+            if (enableClearFx) SpawnClearEffect(_core.LastClear);
+            RenderGrid();
+        }
         return ok;
     }
 
@@ -210,6 +221,78 @@ public class BlastGame : MonoBehaviour
         mf.sharedMesh = _mesh;
         var mr = go.AddComponent<MeshRenderer>();
         mr.sharedMaterial = _mats[color % _mats.Length];
+    }
+
+    // ===== Efek "blast" saat baris/kolom hancur (Tahap 4) =====
+    void SpawnClearEffect(BlastCore.ClearInfo clear)
+    {
+        if (!Application.isPlaying) return;
+        if (clear.Cells == null || clear.Cells.Count == 0) return;
+
+        foreach (var cell in clear.Cells)
+        {
+            var go = new GameObject("Fx");
+            go.transform.SetParent(transform, false);        // anak Game -> ikut rotasi tabung
+            go.transform.localPosition = CellToWorld(cell.c, cell.r);
+            go.transform.localRotation = CellRotation(cell.c);
+            go.transform.localScale = new Vector3(cellWidth * gap, cellHeight * gap, blockDepth);
+
+            var mf = go.AddComponent<MeshFilter>();
+            mf.sharedMesh = _mesh;
+            var mr = go.AddComponent<MeshRenderer>();
+            Color baseC = (palette != null && cell.color >= 0 && cell.color < palette.Length)
+                          ? palette[cell.color] : Color.white;
+            mr.material = MakeFxMaterial(baseC);
+
+            StartCoroutine(AnimateFx(go, mr, mr.material));
+        }
+    }
+
+    IEnumerator AnimateFx(GameObject go, MeshRenderer mr, Material mat)
+    {
+        float dur = Mathf.Max(0.05f, clearFxDuration);
+        float t = 0f;
+        Vector3 s0 = go.transform.localScale;
+        Vector3 s1 = s0 * 1.7f;
+        Vector3 startPos = go.transform.localPosition;
+        Vector3 outward = go.transform.localRotation * Vector3.forward; // radial keluar
+        Color c0 = mat.HasProperty("_BaseColor") ? mat.GetColor("_BaseColor") : mat.color;
+
+        while (t < dur)
+        {
+            if (go == null) yield break; // ke-destroy oleh Rebuild/restart
+            float k = t / dur;
+            go.transform.localScale = Vector3.Lerp(s0, s1, k);
+            go.transform.localPosition = startPos + outward * (k * 0.6f);
+            Color cc = c0; cc.a = Mathf.Lerp(0.95f, 0f, k);
+            if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", cc);
+            mat.color = cc;
+            t += Time.deltaTime;
+            yield return null;
+        }
+        if (go != null) Destroy(go);
+    }
+
+    Material MakeFxMaterial(Color col)
+    {
+        var shader = Shader.Find("Universal Render Pipeline/Lit");
+        if (shader == null) shader = Shader.Find("Standard");
+        var m = new Material(shader);
+
+        if (m.HasProperty("_Surface")) m.SetFloat("_Surface", 1f); // transparan
+        m.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+        m.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+        m.SetInt("_ZWrite", 0);
+        m.DisableKeyword("_SURFACE_TYPE_OPAQUE");
+        m.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+        m.EnableKeyword("_ALPHABLEND_ON");
+        m.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+
+        Color c = col; c.a = 0.95f;
+        if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", c);
+        if (m.HasProperty("_EmissionColor")) { m.EnableKeyword("_EMISSION"); m.SetColor("_EmissionColor", col * 0.6f); }
+        m.color = c;
+        return m;
     }
 
     // ===== Kamera AUTO-FIT + view fixed (menunduk dari depan-atas) =====

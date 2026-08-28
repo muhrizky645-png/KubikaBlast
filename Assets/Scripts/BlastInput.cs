@@ -27,6 +27,7 @@ using KubikaBlast;
 ///    (hijau = boleh ditaruh, merah = tidak boleh).
 ///  - Klik kiri / tap -> taruh potongan tray yang sedang dipilih.
 ///  - Tombol 1 / 2 / 3 -> pilih potongan tray ke-1/2/3. TAB -> ganti ke potongan berikutnya.
+///    (BlastUI juga bisa memilih potongan lewat tap pada slot tray.)
 ///  - Putar TABUNG: drag pakai KLIK-KANAN, atau tombol Q/E, atau panah Kiri/Kanan,
 ///    atau DUA JARI di layar sentuh. (Potongan sendiri TIDAK diputar - khas Block Blast.)
 /// </summary>
@@ -53,6 +54,11 @@ public class BlastInput : MonoBehaviour
     // status drag-putar (klik-kanan)
     bool _rotating;
     float _lastPointerX;
+
+    // ===== API publik untuk BlastUI (Tahap 4) =====
+    public int CurrentIndex => _current;                 // slot tray yang dipilih (-1 = tak ada)
+    public void SelectTray(int i) => TrySelect(i);       // dipanggil saat tap slot tray di UI
+    public void ResetSelection() => SelectFirstUnused(); // dipanggil saat Restart
 
     void Awake()
     {
@@ -92,6 +98,9 @@ public class BlastInput : MonoBehaviour
         // Taruh potongan saat pointer dilepas di sel yang valid (mendukung klik & drag-drop).
         if (haveCell && canPlace && !_rotating && PointerReleased())
         {
+            // Jangan taruh kalau pointer sedang di atas UI (slot tray / tombol).
+            if (BlastUI.PointerBlocksPlacement(PointerPosition())) return;
+
             if (_game.TryPlace(_current, col, row))
             {
                 Debug.Log($"[KubikaBlast] Taruh potongan #{_current} di (c={col}, r={row}). " +
