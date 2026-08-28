@@ -25,11 +25,13 @@ public class BlastGame : MonoBehaviour
     [Header("Flange (gulungan kabel)")]
     public float flangeMargin = 0.4f;       // seberapa flange melebihi cincin blok
     public float flangeThickness = 0.3f;
-    public float drumRadiusFactor = 0.55f;  // drum dibuat lebih kecil (spool dalam)
+    // Drum dibuat mepet ke SISI DALAM blok, disisakan celah drumGap biar tak nyentuh.
+    // Makin kecil drumGap -> drum makin mepet ke blok. 0 = menyentuh (hindari).
+    public float drumGap = 0.08f;
     public bool showAxle = true;
 
-    [Header("Kamera (auto-fit, view fixed)")]
-    public bool autoCamera = true;          // UNCHECK untuk pakai kamera manualmu
+    [Header("Kamera (auto-fit, di-frame SEKALI saja)")]
+    public bool autoCamera = true;          // UNCHECK untuk pakai kamera manualmu (tak akan disentuh)
     public float cameraFitPadding = 1.1f;   // >1 = kamera agak mundur biar tabung tak mepet tepi
     public float cameraTilt = 12f;          // derajat kamera menunduk (0 = lurus dari samping)
     public float cameraAimHeight = 0.45f;   // 0=dasar tabung, 1=puncak; titik yang dibidik kamera
@@ -44,6 +46,7 @@ public class BlastGame : MonoBehaviour
     Transform _blocksRoot;
     Mesh _mesh;
     Material[] _mats;
+    bool _cameraFramed;   // supaya kamera hanya diatur SEKALI (tidak reset tiap Rebuild)
 
     // ===== Hook publik untuk BlastInput (Tahap 3) =====
     public BlastCore Core => _core;   // logika inti (grid, tray, skor)
@@ -59,6 +62,7 @@ public class BlastGame : MonoBehaviour
     /// Bangun ulang seluruh tabung + isi.
     /// Bisa dipanggil MANUAL: klik kanan komponen "Blast Game" di Inspector
     /// lalu pilih "Rebuild Tabung" untuk lihat perubahan TANPA Play.
+    /// Kamera TIDAK ikut di-reset saat Rebuild (lihat _cameraFramed).
     /// </summary>
     [ContextMenu("Rebuild Tabung")]
     public void Rebuild()
@@ -78,10 +82,20 @@ public class BlastGame : MonoBehaviour
 
         BuildPalette();
         BuildReel();
-        SetupCamera();
+
+        // Kamera diatur SEKALI saja (frame pertama), supaya tak reset tiap Rebuild.
+        if (autoCamera && !_cameraFramed) { SetupCamera(); _cameraFramed = true; }
 
         if (demoFill) DemoFill();   // hanya untuk debug; default OFF di Tahap 3
         RenderGrid();
+    }
+
+    /// <summary>Paksa atur ulang kamera auto-fit (mis. setelah ganti ukuran papan).</summary>
+    [ContextMenu("Frame Camera (auto-fit sekali)")]
+    public void FrameCameraNow()
+    {
+        SetupCamera();
+        _cameraFramed = true;
     }
 
     // ===== Pemetaan sel -> ruang LOKAL tabung (bagian 9.1 konsep) =====
@@ -110,9 +124,11 @@ public class BlastGame : MonoBehaviour
         var reel = new GameObject("Reel").transform;
         reel.SetParent(transform, false);
 
-        // Drum (spool dalam) - lebih KECIL dari cincin blok, supaya blok duduk
-        // di TEPI tutup (flange), bukan menempel drum.
-        float drumR = _radius * drumRadiusFactor;
+        // Drum (spool dalam). Dibuat MEPET ke sisi dalam blok:
+        //   sisi dalam blok = _radius - blockDepth/2
+        //   radius drum     = sisi dalam blok - drumGap  (celah kecil biar tak nyentuh)
+        float blockInner = _radius - blockDepth * 0.5f;
+        float drumR = Mathf.Max(0.05f, blockInner - drumGap);
         var drum = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
         drum.name = "Drum";
         drum.transform.SetParent(reel, false);
@@ -125,14 +141,15 @@ public class BlastGame : MonoBehaviour
         CreateDisc("FlangeBawah", reel, 0f, flangeR);
         CreateDisc("FlangeAtas", reel, totalH, flangeR);
 
-        // Poros/as opsional
+        // Poros/as opsional (di tengah drum)
         if (showAxle)
         {
             var axle = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
             axle.name = "Axle";
             axle.transform.SetParent(reel, false);
             float axleH = totalH + flangeThickness * 4f;
-            axle.transform.localScale = new Vector3(drumR * 0.5f, axleH / 2f, drumR * 0.5f);
+            float axleR = Mathf.Min(drumR * 0.35f, 0.35f);
+            axle.transform.localScale = new Vector3(axleR * 2f, axleH / 2f, axleR * 2f);
             axle.transform.localPosition = new Vector3(0, totalH / 2f, 0);
             Paint(axle, new Color(0.18f, 0.19f, 0.22f));
         }
@@ -197,10 +214,9 @@ public class BlastGame : MonoBehaviour
 
     // ===== Kamera AUTO-FIT + view fixed (menunduk dari depan-atas) =====
     // Memperhitungkan FOV kamera + rasio layar (penting untuk layar HP portrait),
-    // lalu tempatkan kamera pada sudut tetap yang enak dilihat.
+    // lalu tempatkan kamera pada sudut tetap yang enak dilihat. Dipanggil SEKALI.
     void SetupCamera()
     {
-        if (!autoCamera) return; // biarkan kamera manual apa adanya
         var cam = Camera.main;
         if (cam == null) return;
 
