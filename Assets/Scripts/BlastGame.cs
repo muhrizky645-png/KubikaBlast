@@ -28,10 +28,11 @@ public class BlastGame : MonoBehaviour
     public float drumRadiusFactor = 0.55f;  // drum dibuat lebih kecil (spool dalam)
     public bool showAxle = true;
 
-    [Header("Kamera (auto-fit)")]
+    [Header("Kamera (auto-fit, view fixed)")]
     public bool autoCamera = true;          // UNCHECK untuk pakai kamera manualmu
-    public float cameraFitPadding = 1.15f;  // >1 = kamera agak mundur biar tabung tak mepet tepi
-    public float cameraHeightOffset = 0f;   // geser kamera naik(+)/turun(-) dalam unit
+    public float cameraFitPadding = 1.1f;   // >1 = kamera agak mundur biar tabung tak mepet tepi
+    public float cameraTilt = 12f;          // derajat kamera menunduk (0 = lurus dari samping)
+    public float cameraAimHeight = 0.45f;   // 0=dasar tabung, 1=puncak; titik yang dibidik kamera
 
     [Header("Debug")]
     public bool demoFill = false;           // isi grid contoh (dulu Tahap 2). Default OFF.
@@ -194,8 +195,9 @@ public class BlastGame : MonoBehaviour
         mr.sharedMaterial = _mats[color % _mats.Length];
     }
 
-    // ===== Kamera AUTO-FIT: hitung jarak supaya SELURUH tabung muat di layar =====
-    // Memperhitungkan FOV kamera + rasio layar (penting untuk layar HP portrait).
+    // ===== Kamera AUTO-FIT + view fixed (menunduk dari depan-atas) =====
+    // Memperhitungkan FOV kamera + rasio layar (penting untuk layar HP portrait),
+    // lalu tempatkan kamera pada sudut tetap yang enak dilihat.
     void SetupCamera()
     {
         if (!autoCamera) return; // biarkan kamera manual apa adanya
@@ -203,7 +205,8 @@ public class BlastGame : MonoBehaviour
         if (cam == null) return;
 
         float totalH = height * cellHeight;
-        float centerY = totalH / 2f;
+        float aimY = totalH * Mathf.Clamp01(cameraAimHeight); // titik yang dibidik
+        Vector3 target = new Vector3(0f, aimY, 0f);
 
         // setengah-ukuran tabung yang harus muat di layar
         float halfH = totalH / 2f + flangeThickness;   // arah tinggi
@@ -217,8 +220,11 @@ public class BlastGame : MonoBehaviour
         float distForWidth = halfW / Mathf.Max(0.0001f, tanH);
         float dist = Mathf.Max(distForHeight, distForWidth) * cameraFitPadding;
 
-        cam.transform.position = new Vector3(0f, centerY + cameraHeightOffset, -dist);
-        cam.transform.LookAt(new Vector3(0f, centerY, 0f));
+        // posisi kamera: mundur di -Z lalu naik sesuai sudut tunduk (tilt)
+        float rad = cameraTilt * Mathf.Deg2Rad;
+        Vector3 offset = new Vector3(0f, Mathf.Sin(rad) * dist, -Mathf.Cos(rad) * dist);
+        cam.transform.position = target + offset;
+        cam.transform.LookAt(target);
     }
 
     // ===== Util warna & material =====
