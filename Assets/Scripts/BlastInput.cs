@@ -66,6 +66,8 @@ public class BlastInput : MonoBehaviour
     // bukan objek 3D yang berdiri di dunia. Selalu menghadap kamera & rata.
     public bool enableHeldPiece = true;
     // Offset ke ATAS (pixel) supaya blok melayang di atas jari, tak ketutup jari.
+    // Dipakai HANYA saat FALLBACK (jari belum di sel valid). Saat terkunci ke
+    // ghost, posisi blok mengikuti sel tujuan (lihat heldGhostLiftCells).
     public float heldScreenYOffset = 90f;
     // Samakan ukuran blok melayang dengan blok ASLI di tabung (seperti "bayangan" blok).
     public bool matchBlockSize = true;
@@ -75,6 +77,10 @@ public class BlastInput : MonoBehaviour
     public float heldPixelSize = 90f;
     // Jarak overlay dari kamera (unit dunia). Kecil = terasa menempel di layar.
     public float heldDepth = 2f;
+    // OPSI #3: kunci blok melayang ke posisi ghost (sel tujuan). Nilai = seberapa
+    // tinggi (dalam satuan SEL) blok terangkat di atas sel tujuan agar tak ketutup
+    // jari. 0 = pas menutup ghost. Ikut skala kamera otomatis (relatif ukuran sel).
+    public float heldGhostLiftCells = 0.6f;
 
     BlastGame _game;
     Camera _cam;
@@ -503,9 +509,14 @@ public class BlastInput : MonoBehaviour
     }
 
     // Gambar potongan seperti OVERLAY yang menempel di permukaan layar:
-    // - Tata letak sel dihitung dalam PIXEL layar (relatif posisi jari).
+    // - Tata letak sel dihitung dalam PIXEL layar (relatif titik ACUAN).
     // - Ukuran disamakan dengan blok ASLI di tabung (matchBlockSize) -> "bayangan" blok.
     // - Diproyeksikan dekat kamera (heldDepth) & selalu menghadap kamera -> tampak rata.
+    //
+    // OPSI #3 (kunci ke ghost): titik ACUAN = pusat sel tujuan (di tabung) yang
+    // diproyeksikan ke layar, lalu diangkat sedikit (heldGhostLiftCells). Jadi blok
+    // melayang selalu "duduk" tepat di atas ghost, apa pun angle/zoom kamera.
+    // Kalau belum ada sel tujuan yang valid, blok jatuh-balik mengikuti jari.
     void SetHeldPiece(bool show, BlastCore.Piece piece)
     {
         EnsureHeldRoot();
@@ -516,11 +527,7 @@ public class BlastInput : MonoBehaviour
             return;
         }
 
-        // Titik acuan di LAYAR (pixel): posisi jari + offset ke atas.
-        Vector2 finger = PointerPosition();
-        finger.y += heldScreenYOffset;
-
-        // Pusatkan potongan pada jari (rata-rata offset sel).
+        // Pusatkan potongan pada titik acuan (rata-rata offset sel).
         int len = piece.Cells.Length;
         float avgX = 0f, avgY = 0f;
         foreach (var (dx, dy) in piece.Cells) { avgX += dx; avgY += dy; }
@@ -544,6 +551,38 @@ public class BlastInput : MonoBehaviour
         }
         effPx *= Mathf.Max(0.05f, heldSizeMultiplier);
 
+        // ===== OPSI #3: KUNCI titik ACUAN ke posisi ghost =====
+        // Kalau ada sel tujuan VALID, acuan = pusat sel-sel tujuan (diproyeksikan ke
+        // layar) + angkat sedikit. Kalau belum ada, fallback ikut jari + offset.
+        Vector2 anchor;
+        bool lockedToGhost = _hasLast && _lastCanPlace;
+        if (lockedToGhost)
+        {
+            Vector3 sum = Vector3.zero; int cnt = 0;
+            foreach (var (dx, dy) in piece.Cells)
+            {
+                int r = _lastRow + dy;
+                if (r < 0 || r >= _game.height) continue;
+                int c = _game.Core.Wrap(_lastCol + dx);
+                sum += _game.transform.TransformPoint(_game.CellToWorld(c, r));
+                cnt++;
+            }
+            if (cnt > 0)
+            {
+                Vector3 sp3 = _cam.WorldToScreenPoint(sum / cnt);
+                anchor = new Vector2(sp3.x, sp3.y);
+                anchor.y += effPx * heldGhostLiftCells; // terangkat sedikit di atas ghost
+            }
+            else
+            {
+                anchor = PointerPosition(); anchor.y += heldScreenYOffset;
+            }
+        }
+        else
+        {
+            anchor = PointerPosition(); anchor.y += heldScreenYOffset;
+        }
+
         float worldPerPixel = (2f * d * tanV) * invH;
         float cube = effPx * worldPerPixel; // sisi kubus di dunia (~effPx px di layar)
 
@@ -554,7 +593,7 @@ public class BlastInput : MonoBehaviour
         foreach (var (dx, dy) in piece.Cells)
         {
             // posisi sel di LAYAR (pixel), lalu proyeksikan ke dunia di depan kamera.
-            Vector2 sp = finger + new Vector2((dx - avgX) * effPx,
+            Vector2 sp = anchor + new Vector2((dx - avgX) * effPx,
                                               (dy - avgY) * effPx);
             Vector3 world = _cam.ScreenToWorldPoint(new Vector3(sp.x, sp.y, d));
 
