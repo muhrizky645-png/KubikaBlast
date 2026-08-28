@@ -960,7 +960,7 @@ MonoBehaviour:
   heldPixelSize: 90
   heldDepth: 2
   heldGhostLiftCells: -0.2
-  snapToNearestValid: 0
+  snapToNearestValid: 1
   snapSearchRadius: 1
   magnetToClears: 0
   magnetClearBonus: 1
