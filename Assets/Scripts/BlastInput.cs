@@ -25,8 +25,9 @@ using KubikaBlast;
 ///  1. TEKAN jari TEPAT di potongan tray yang diinginkan (BUKAN di tabung).
 ///  2. Tanpa melepas, SERET jari ke tabung. Selama menyeret, potongan tampak
 ///     "MELAYANG" sebagai OVERLAY di permukaan layar (mengikuti jari, rata,
-///     menghadap kamera — bukan objek 3D yang berdiri di dunia). Ghost di
-///     tabung HANYA muncul saat posisi PAS (valid).
+///     menghadap kamera). Ukuran blok melayang DISAMAKAN dengan blok asli di
+///     tabung -> seperti "bayangan" blok itu. Ghost di tabung HANYA muncul saat
+///     posisi PAS (valid), dan warnanya SAMA dengan warna balok.
 ///  3. Kalau posisi seret membuat cincin/kolom PENUH -> sel yang akan hancur
 ///     ikut MENYALA (preview clear ala Block Blast).
 ///  4. LEPAS jari di sel valid -> potongan ditaruh. Lepas di luar tabung = batal.
@@ -49,11 +50,12 @@ public class BlastInput : MonoBehaviour
     // Jarak minimal (pixel) jari harus bergerak agar dihitung MENYERET, bukan tap.
     public float dragThreshold = 12f;
 
-    [Header("Warna ghost preview (alpha diabaikan, pakai ghostAlpha)")]
+    [Header("Ghost preview (warna mengikuti warna balok)")]
+    // Ghost sekarang diwarnai dari palette balok; dua warna ini hanya cadangan.
     public Color validColor = new Color(0.35f, 0.90f, 0.40f, 1f);
     public Color invalidColor = new Color(0.95f, 0.30f, 0.30f, 1f);
     // Transparansi ghost. Dibuat KECIL supaya jelas beda dari blok terpasang (yang solid).
-    [Range(0.05f, 1f)] public float ghostAlpha = 0.25f;
+    [Range(0.05f, 1f)] public float ghostAlpha = 0.35f;
 
     [Header("Preview CLEAR ala Block Blast")]
     public bool enableClearPreview = true;
@@ -66,7 +68,11 @@ public class BlastInput : MonoBehaviour
     public bool enableHeldPiece = true;
     // Offset ke ATAS (pixel) supaya blok melayang di atas jari, tak ketutup jari.
     public float heldScreenYOffset = 90f;
-    // Ukuran satu sel blok melayang di LAYAR (pixel).
+    // Samakan ukuran blok melayang dengan blok ASLI di tabung (seperti "bayangan" blok).
+    public bool matchBlockSize = true;
+    // Pengali halus ukuran blok melayang (1 = pas sama blok asli).
+    public float heldSizeMultiplier = 1f;
+    // Ukuran satu sel blok melayang di LAYAR (pixel). Dipakai HANYA bila matchBlockSize = false.
     public float heldPixelSize = 90f;
     // Jarak overlay dari kamera (unit dunia). Kecil = terasa menempel di layar.
     public float heldDepth = 2f;
@@ -84,6 +90,8 @@ public class BlastInput : MonoBehaviour
     Transform _heldRoot;
     readonly List<GameObject> _held = new List<GameObject>();
     readonly Dictionary<int, Material> _solidMats = new Dictionary<int, Material>();
+    // material ghost per-warna (translusen, warna = warna balok).
+    readonly Dictionary<int, Material> _ghostMats = new Dictionary<int, Material>();
 
     // status drag-putar (klik-kanan)
     bool _rotating;
@@ -436,7 +444,8 @@ public class BlastInput : MonoBehaviour
             return;
         }
 
-        var mat = canPlace ? _matValid : _matInvalid;
+        // Ghost diwarnai SAMA dengan warna balok (translusen) -> seperti bayangan balok itu.
+        var mat = GhostMat(piece.Color);
         EnsureGhosts(piece.Cells.Length);
 
         int used = 0;
@@ -485,8 +494,8 @@ public class BlastInput : MonoBehaviour
 
     // Gambar potongan seperti OVERLAY yang menempel di permukaan layar:
     // - Tata letak sel dihitung dalam PIXEL layar (relatif posisi jari).
-    // - Diproyeksikan ke dunia pada kedalaman kecil (heldDepth) di depan kamera.
-    // - Selalu menghadap kamera -> tampak rata, tidak "berdiri" di dunia.
+    // - Ukuran disamakan dengan blok ASLI di tabung (matchBlockSize) -> "bayangan" blok.
+    // - Diproyeksikan dekat kamera (heldDepth) & selalu menghadap kamera -> tampak rata.
     void SetHeldPiece(bool show, BlastCore.Piece piece)
     {
         EnsureHeldRoot();
@@ -507,11 +516,26 @@ public class BlastInput : MonoBehaviour
         foreach (var (dx, dy) in piece.Cells) { avgX += dx; avgY += dy; }
         if (len > 0) { avgX /= len; avgY /= len; }
 
-        // Konversi 1 pixel -> ukuran dunia pada kedalaman heldDepth (perspektif).
         float d = Mathf.Max(0.05f, heldDepth);
         float tanV = Mathf.Tan(_cam.fieldOfView * 0.5f * Mathf.Deg2Rad);
-        float worldPerPixel = (2f * d * tanV) / Mathf.Max(1, Screen.height);
-        float cube = heldPixelSize * worldPerPixel; // sisi kubus di dunia (~heldPixelSize px)
+        float invH = 1f / Mathf.Max(1, Screen.height);
+
+        // Ukuran sel blok melayang (pixel). Kalau matchBlockSize: hitung supaya
+        // apparent size-nya SAMA dengan blok asli di permukaan DEPAN tabung.
+        float effPx = heldPixelSize;
+        if (matchBlockSize)
+        {
+            Vector3 tubeCenter = _game.transform.position
+                                 + Vector3.up * (_game.height * _game.cellHeight * 0.5f);
+            float dTube = Mathf.Max(0.1f,
+                Vector3.Distance(_cam.transform.position, tubeCenter) - _game.Radius);
+            float wppTube = (2f * dTube * tanV) * invH;
+            if (wppTube > 1e-6f) effPx = (_game.cellWidth * _game.gap) / wppTube;
+        }
+        effPx *= Mathf.Max(0.05f, heldSizeMultiplier);
+
+        float worldPerPixel = (2f * d * tanV) * invH;
+        float cube = effPx * worldPerPixel; // sisi kubus di dunia (~effPx px di layar)
 
         Quaternion rot = _cam.transform.rotation; // menghadap kamera -> tampak rata di layar
 
@@ -520,8 +544,8 @@ public class BlastInput : MonoBehaviour
         foreach (var (dx, dy) in piece.Cells)
         {
             // posisi sel di LAYAR (pixel), lalu proyeksikan ke dunia di depan kamera.
-            Vector2 sp = finger + new Vector2((dx - avgX) * heldPixelSize,
-                                              (dy - avgY) * heldPixelSize);
+            Vector2 sp = finger + new Vector2((dx - avgX) * effPx,
+                                              (dy - avgY) * effPx);
             Vector3 world = _cam.ScreenToWorldPoint(new Vector3(sp.x, sp.y, d));
 
             var g = _held[used++];
@@ -561,6 +585,18 @@ public class BlastInput : MonoBehaviour
         if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", c);
         m.color = c;
         _solidMats[color] = m;
+        return m;
+    }
+
+    // Material GHOST: translusen, warna = warna balok. Dipakai saat posisi PAS saja.
+    Material GhostMat(int color)
+    {
+        if (_ghostMats.TryGetValue(color, out var found) && found != null) return found;
+        Color c = (_game.palette != null && color >= 0 && color < _game.palette.Length)
+                  ? _game.palette[color] : Color.white;
+        c.a = ghostAlpha;
+        var m = MakeGhostMaterial(c, true); // sedikit emission -> menyala lembut
+        _ghostMats[color] = m;
         return m;
     }
 
