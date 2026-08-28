@@ -35,6 +35,12 @@ using KubikaBlast;
 ///  * Menekan/menyeret LANGSUNG di tabung TIDAK menaruh apa pun. Menaruh HANYA
 ///    sah lewat gestur seret yang DIMULAI dari slot tray.
 ///
+/// POLESAN UX PENEMPATAN (baru):
+///  - Toleransi snap: kalau titik jari tak pas, cari sel valid TERDEKAT.
+///  - Magnet ke clear: utamakan posisi yang memicu ring/kolom penuh.
+///  - Auto-putar tabung saat jari dekat tepi layar (jangkau sisi tersembunyi).
+///  - Feedback merah saat blok belum ketemu sel valid.
+///
 /// Putar TABUNG: drag KLIK-KANAN / Q-E / panah / DUA JARI.
 /// </summary>
 [RequireComponent(typeof(BlastGame))]
@@ -52,9 +58,9 @@ public class BlastInput : MonoBehaviour
     public float dragThreshold = 12f;
 
     [Header("Indikator sel tujuan (gaya Block Blast)")]
-    // Highlight HALUS di sel tempat potongan akan mendarat (bukan balok berwarna penuh).
-    // Alpha kecil = tipis/tidak mengganggu. Dipakai HANYA saat posisi PAS.
-    public Color ghostHighlightColor = new Color(1f, 1f, 1f, 0.22f);
+    // Highlight di sel tempat potongan akan mendarat. Alpha dinaikkan biar lebih TEGAS
+    // (gampang kelihatan sel tujuannya). Dipakai HANYA saat posisi PAS.
+    public Color ghostHighlightColor = new Color(1f, 1f, 1f, 0.35f);
 
     [Header("Preview CLEAR ala Block Blast")]
     public bool enableClearPreview = true;
@@ -79,15 +85,33 @@ public class BlastInput : MonoBehaviour
     public float heldDepth = 2f;
     // OPSI #3: kunci blok melayang ke posisi ghost (sel tujuan). Nilai = seberapa
     // tinggi (dalam satuan SEL) blok terangkat di atas sel tujuan agar tak ketutup jari.
-    // Saat terkunci ke ghost, blok kini digambar MELENGKUNG di permukaan tabung
-    // (sinkron dgn bayangan) & diangkat RADIAL keluar sejauh nilai ini. 0 = pas di ghost.
-    public float heldGhostLiftCells = 0.6f;
+    // Diturunkan (0.6 -> 0.35) supaya posisi jatuhnya terasa lebih pas/intuitif.
+    // 0 = pas di ghost.
+    public float heldGhostLiftCells = 0.35f;
+
+    [Header("Toleransi snap (magnet ke sel valid terdekat)")]
+    // Kalau titik jari tak pas di sel valid, cari sel valid TERDEKAT dalam radius ini.
+    public bool snapToNearestValid = true;
+    public int snapSearchRadius = 2;      // berapa sel ke segala arah yang dicari
+    // Utamakan posisi yang MEMICU CLEAR (magnet ke ring/kolom yang hampir penuh).
+    public bool magnetToClears = true;
+    public float magnetClearBonus = 3f;   // pengurang "skor jarak" bila memicu clear
+
+    [Header("Auto-putar tabung saat seret dekat tepi layar")]
+    public bool autoRotateWhileDragging = true;
+    public float edgeRotatePx = 90f;      // lebar zona tepi kiri/kanan (pixel)
+    public float edgeRotateSpeed = 120f;  // derajat / detik saat jari di zona tepi
+
+    [Header("Feedback saat tak muat")]
+    // Warnai MERAH blok melayang saat belum menemukan sel tujuan valid.
+    public bool tintInvalidHeld = true;
+    public Color invalidHeldColor = new Color(1f, 0.28f, 0.28f, 0.8f);
 
     BlastGame _game;
     Camera _cam;
 
     int _current = -1;                 // index potongan tray yang sedang dipilih
-    Material _matGhost, _matPreview;
+    Material _matGhost, _matPreview, _matInvalidHeld;
     Transform _ghostRoot, _previewRoot;
     readonly List<GameObject> _ghosts = new List<GameObject>();
     readonly List<GameObject> _previews = new List<GameObject>();
@@ -128,6 +152,7 @@ public class BlastInput : MonoBehaviour
         // Indikator sel tujuan: highlight tipis (pakai emission -> glow lembut).
         _matGhost = MakeGhostMaterial(ghostHighlightColor, true);
         _matPreview = MakeGhostMaterial(clearPreviewColor, true); // pakai emission -> menyala
+        _matInvalidHeld = MakeGhostMaterial(invalidHeldColor, false); // merah translusen (tak muat)
         EnsureGhostRoot();
         EnsurePreviewRoot();
         EnsureHeldRoot();
@@ -176,6 +201,10 @@ public class BlastInput : MonoBehaviour
         bool active = piece != null && !core.GameOver && !_rotating && !multi
                       && dragging && (!requireTrayDrag || _dragFromTray);
 
+        // Auto-putar tabung saat menyeret potongan & jari dekat tepi layar, biar
+        // sel di sisi yang belum kelihatan bisa dijangkau tanpa lepas jari.
+        if (active) HandleEdgeAutoRotate();
+
         int col = 0, row = 0;
         bool haveCell = false;
         bool canPlace = false;
@@ -185,11 +214,22 @@ public class BlastInput : MonoBehaviour
             // Pusatkan potongan tepat di bawah jari (gaya Block Blast) supaya
             // indikator tujuan TIDAK geser ke kanan. Anchor = sel jari - centroid.
             PieceCentroidOffset(piece, out int offX, out int offY);
-            col = core.Wrap(col - offX);
-            row = row - offY;
+            int baseCol = core.Wrap(col - offX);
+            int baseRow = row - offY;
 
             haveCell = true;
-            canPlace = core.CanPlace(piece, col, row);
+
+            // Toleransi snap: kalau anchor pas tak muat, cari sel valid TERDEKAT
+            // (dan utamakan yang memicu clear). Bikin penempatan jauh lebih forgiving.
+            if (TryFindPlacement(piece, baseCol, baseRow, out int snapCol, out int snapRow))
+            {
+                col = snapCol; row = snapRow; canPlace = true;
+            }
+            else
+            {
+                col = baseCol; row = baseRow; canPlace = false;
+            }
+
             _lastCol = col; _lastRow = row; _lastCanPlace = canPlace; _hasLast = true;
         }
         else if (held)
@@ -242,6 +282,45 @@ public class BlastInput : MonoBehaviour
         if (n > 0) { ax /= n; ay /= n; }
         offX = Mathf.RoundToInt(ax);
         offY = Mathf.RoundToInt(ay);
+    }
+
+    // ================= TOLERANSI SNAP =================
+    // Cari anchor VALID terdekat dari (baseCol,baseRow) dalam radius snapSearchRadius.
+    // Skor = jarak^2 dari anchor jari; dikurangi magnetClearBonus bila posisi itu
+    // memicu clear (magnet ke ring/kolom hampir penuh). Return posisi terbaik.
+    bool TryFindPlacement(BlastCore.Piece piece, int baseCol, int baseRow,
+                          out int bestCol, out int bestRow)
+    {
+        var core = _game.Core;
+        bestCol = baseCol; bestRow = baseRow;
+
+        // Tanpa toleransi: cek anchor apa adanya (perilaku lama).
+        if (!snapToNearestValid)
+            return core.CanPlace(piece, baseCol, baseRow);
+
+        int radius = Mathf.Max(0, snapSearchRadius);
+        float best = float.MaxValue;
+        bool found = false;
+
+        for (int dr = -radius; dr <= radius; dr++)
+        {
+            for (int dc = -radius; dc <= radius; dc++)
+            {
+                int cc = core.Wrap(baseCol + dc);
+                int rr = baseRow + dr;
+                if (!core.CanPlace(piece, cc, rr)) continue;
+
+                float score = dc * dc + dr * dr; // makin dekat jari makin diutamakan
+                if (magnetToClears)
+                {
+                    var clears = PredictClears(piece, cc, rr);
+                    if (clears.Count > 0) score -= magnetClearBonus;
+                }
+
+                if (score < best) { best = score; bestCol = cc; bestRow = rr; found = true; }
+            }
+        }
+        return found;
     }
 
     // ================= PREDIKSI CLEAR (untuk preview) =================
@@ -357,6 +436,22 @@ public class BlastInput : MonoBehaviour
 
         if (Mathf.Abs(deltaDeg) > 0.0001f)
             _game.transform.Rotate(0f, deltaDeg, 0f, Space.World);
+    }
+
+    // Saat menyeret potongan & jari dekat tepi KIRI/KANAN layar, putar tabung
+    // perlahan supaya sel di sisi yang belum kelihatan bisa dijangkau.
+    void HandleEdgeAutoRotate()
+    {
+        if (!autoRotateWhileDragging) return;
+        float x = PointerPosition().x;
+        float w = Screen.width;
+        float edge = Mathf.Max(1f, edgeRotatePx);
+        float dir = 0f;
+        if (x < edge) dir = 1f;               // dekat tepi KIRI
+        else if (x > w - edge) dir = -1f;     // dekat tepi KANAN
+        if (Mathf.Abs(dir) < 0.5f) return;
+        float deg = dir * edgeRotateSpeed * Time.deltaTime;
+        _game.transform.Rotate(0f, deg, 0f, Space.World);
     }
 
     // ================= PILIH POTONGAN TRAY =================
@@ -475,10 +570,11 @@ public class BlastInput : MonoBehaviour
             g.SetActive(true);
             g.transform.localPosition = _game.CellToWorld(c, r);
             g.transform.localRotation = _game.CellRotation(c);
-            // highlight tipis "membungkus" sel tujuan (sedikit lebih besar dari blok).
-            g.transform.localScale = new Vector3(_game.cellWidth * _game.gap * 1.04f,
-                                                 _game.cellHeight * _game.gap * 1.04f,
-                                                 _game.blockDepth * 1.06f);
+            // highlight "membungkus" sel tujuan (sedikit lebih besar dari blok).
+            // Dibikin lebih tebal biar indikatornya lebih tegas.
+            g.transform.localScale = new Vector3(_game.cellWidth * _game.gap * 1.08f,
+                                                 _game.cellHeight * _game.gap * 1.08f,
+                                                 _game.blockDepth * 1.12f);
             g.GetComponent<MeshRenderer>().sharedMaterial = _matGhost;
         }
         for (int i = used; i < _ghosts.Count; i++)
@@ -515,7 +611,7 @@ public class BlastInput : MonoBehaviour
     //      lalu diangkat RADIAL keluar sejauh heldGhostLiftCells. Hasilnya lengkungnya
     //      SINKRON dengan bayangan, apa pun angle/zoom kamera.
     //  (B) OVERLAY LAYAR rata (fallback saat belum ada sel tujuan valid) -> mengikuti
-    //      jari, menghadap kamera, seukuran blok asli.
+    //      jari, menghadap kamera, seukuran blok asli. Diwarnai MERAH bila tak muat.
     void SetHeldPiece(bool show, BlastCore.Piece piece)
     {
         EnsureHeldRoot();
@@ -568,6 +664,7 @@ public class BlastInput : MonoBehaviour
     // (B) Fallback OVERLAY LAYAR rata: dipakai saat belum ada sel tujuan valid.
     // Tata letak sel dihitung dalam PIXEL layar (relatif titik acuan = jari + offset),
     // diproyeksikan dekat kamera (heldDepth) & selalu menghadap kamera -> tampak rata.
+    // Diwarnai MERAH (invalidHeldColor) sebagai feedback "belum ketemu sel valid".
     void RenderHeldFlatOverlay(BlastCore.Piece piece)
     {
         int len = piece.Cells.Length;
@@ -601,6 +698,10 @@ public class BlastInput : MonoBehaviour
 
         Quaternion rot = _cam.transform.rotation; // menghadap kamera -> tampak rata di layar
 
+        // Material: merah kalau tak muat (feedback), selain itu warna asli potongan.
+        Material mat = (tintInvalidHeld && _matInvalidHeld != null)
+                       ? _matInvalidHeld : SolidMat(piece.Color);
+
         int used = 0;
         foreach (var (dx, dy) in piece.Cells)
         {
@@ -614,7 +715,7 @@ public class BlastInput : MonoBehaviour
             g.transform.position = world;
             g.transform.rotation = rot;
             g.transform.localScale = new Vector3(cube * _game.gap, cube * _game.gap, cube * 0.6f);
-            g.GetComponent<MeshRenderer>().sharedMaterial = SolidMat(piece.Color);
+            g.GetComponent<MeshRenderer>().sharedMaterial = mat;
         }
         for (int i = used; i < _held.Count; i++)
             if (_held[i] != null) _held[i].SetActive(false);
@@ -671,7 +772,8 @@ public class BlastInput : MonoBehaviour
         if (withEmission && m.HasProperty("_EmissionColor"))
         {
             m.EnableKeyword("_EMISSION");
-            m.SetColor("_EmissionColor", new Color(col.r, col.g, col.b) * 0.9f);
+            // Emission dinaikkan (0.9 -> 1.7) biar indikator lebih tegas/nyala.
+            m.SetColor("_EmissionColor", new Color(col.r, col.g, col.b) * 1.7f);
         }
         return m;
     }
