@@ -14,7 +14,7 @@ using UnityEngine.InputSystem;
 using KubikaBlast;
 
 /// <summary>
-/// TAHAP 3 + 4b — Input & drag-drop untuk Kubika Blast.
+/// TAHAP 3 + 4c — Input & drag-drop untuk Kubika Blast.
 /// Tempel komponen ini ke GameObject "Game" yang SAMA dengan BlastGame.
 ///
 /// PENTING: DefaultExecutionOrder dibuat > 0 supaya BlastGame.Start() (yang
@@ -22,12 +22,12 @@ using KubikaBlast;
 /// BlastInput.Start(). Selain itu ghost root juga dibuat ulang otomatis kalau
 /// hilang (mis. setelah Rebuild), lihat EnsureGhostRoot().
 ///
-/// MODEL SERET (cocok untuk HP):
+/// MODEL MURNI SERET (cocok untuk HP):
 ///  1. Pilih potongan tray (tap slot di UI, atau tombol 1/2/3, atau TAB).
-///  2. TEKAN & SERET jari di permukaan tabung -> ghost preview muncul MENGIKUTI jari
-///     (hijau = boleh, merah = tidak boleh). Ghost HANYA tampil selama jari menekan.
+///  2. TEKAN & SERET jari di permukaan tabung. Ghost preview MUNCUL hanya setelah
+///     jari benar-benar BERGERAK melewati ambang (dragThreshold). Sekadar TAP /
+///     PENCET DIAM tidak akan menaruh apa pun.
 ///  3. LEPAS jari di sel valid -> potongan ditaruh. Seret keluar tabung lalu lepas = BATAL.
-///  - Tap cepat tetap berfungsi (dianggap seret sangat singkat).
 ///  - Uncheck "Ghost Only While Dragging" kalau mau preview hover pakai mouse (desktop).
 ///
 /// Putar TABUNG: drag KLIK-KANAN, atau Q/E, atau panah Kiri/Kanan, atau DUA JARI.
@@ -42,9 +42,11 @@ public class BlastInput : MonoBehaviour
     public float dragRotateSpeed = 0.3f;  // derajat / pixel (drag klik-kanan atau 2 jari)
 
     [Header("Perilaku ghost / drag")]
-    // true (HP): ghost hanya muncul saat jari menekan/seret.
+    // true (HP): ghost hanya muncul saat MENYERET (jari menekan + bergerak).
     // false (mouse desktop): ghost tampil saat pointer hover walau tak menekan.
     public bool ghostOnlyWhileDragging = true;
+    // Jarak minimal (pixel) jari harus bergerak agar dihitung MENYERET, bukan tap.
+    public float dragThreshold = 12f;
 
     [Header("Warna ghost preview (alpha = transparansi)")]
     public Color validColor = new Color(0.35f, 0.90f, 0.40f, 0.50f);
@@ -61,6 +63,10 @@ public class BlastInput : MonoBehaviour
     // status drag-putar (klik-kanan)
     bool _rotating;
     float _lastPointerX;
+
+    // deteksi seret: posisi saat mulai menekan + apakah sudah dihitung menyeret
+    Vector2 _pressStartPos;
+    bool _isDragging;
 
     // target terakhir saat menyeret -> dipakai untuk menaruh saat jari dilepas
     int _lastCol, _lastRow;
@@ -103,9 +109,21 @@ public class BlastInput : MonoBehaviour
         bool multi = MultiTouchActive();   // 2 jari = gestur putar, bukan menaruh
         bool held = PointerHeld();         // jari/klik-kiri sedang menekan?
 
-        // Ghost aktif hanya saat menyeret (mode HP). Saat putar / 2 jari / game over -> nonaktif.
-        bool active = piece != null && !core.GameOver && !_rotating && !multi
-                      && (!ghostOnlyWhileDragging || held);
+        // ---- deteksi SERET sungguhan (bukan tap) ----
+        if (PointerPressedThisFrame())
+        {
+            _pressStartPos = PointerPosition();
+            _isDragging = false;
+        }
+        if (held && !_isDragging &&
+            (PointerPosition() - _pressStartPos).sqrMagnitude >= dragThreshold * dragThreshold)
+        {
+            _isDragging = true; // jari sudah bergerak cukup jauh -> ini menyeret
+        }
+
+        // Mode HP: harus MENYERET. Mode desktop (hover): selalu preview.
+        bool dragging = ghostOnlyWhileDragging ? (held && _isDragging) : true;
+        bool active = piece != null && !core.GameOver && !_rotating && !multi && dragging;
 
         int col = 0, row = 0;
         bool haveCell = false;
@@ -120,16 +138,17 @@ public class BlastInput : MonoBehaviour
         }
         else if (held)
         {
-            // menekan tapi tidak di atas sel tabung -> seret keluar = batalkan target
+            // menekan tapi belum menyeret / di luar sel tabung -> tidak ada target
             _hasLast = false;
         }
 
         SetGhost(haveCell, piece, col, row, canPlace);
 
-        // LEPAS jari/klik -> taruh di sel valid terakhir (drag-and-drop khas HP).
+        // LEPAS jari/klik -> taruh di sel valid terakhir (HANYA jika benar-benar menyeret).
         if (PointerReleased() && !_rotating && !multi)
         {
-            if (_hasLast && _lastCanPlace && piece != null
+            bool draggedEnough = !ghostOnlyWhileDragging || _isDragging;
+            if (draggedEnough && _hasLast && _lastCanPlace && piece != null
                 && !BlastUI.PointerBlocksPlacement(PointerPosition()))
             {
                 if (_game.TryPlace(_current, _lastCol, _lastRow))
@@ -141,7 +160,8 @@ public class BlastInput : MonoBehaviour
                         Debug.Log("[KubikaBlast] GAME OVER - tidak ada potongan tray yang muat lagi.");
                 }
             }
-            _hasLast = false; // reset setiap kali jari dilepas
+            _hasLast = false;
+            _isDragging = false; // reset untuk gestur berikutnya
         }
     }
 
@@ -357,6 +377,19 @@ public class BlastInput : MonoBehaviour
         return Vector2.zero;
 #else
         return Input.mousePosition;
+#endif
+    }
+
+    bool PointerPressedThisFrame() // klik kiri / jari BARU menekan frame ini
+    {
+#if USE_NEW_INPUT
+        var m = Mouse.current;
+        if (m != null && m.leftButton.wasPressedThisFrame) return true;
+        var ts = Touchscreen.current;
+        if (ts != null && ts.primaryTouch != null && ts.primaryTouch.press.wasPressedThisFrame) return true;
+        return false;
+#else
+        return Input.GetMouseButtonDown(0);
 #endif
     }
 
