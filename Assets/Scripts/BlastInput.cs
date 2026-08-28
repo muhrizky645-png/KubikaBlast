@@ -14,24 +14,22 @@ using UnityEngine.InputSystem;
 using KubikaBlast;
 
 /// <summary>
-/// TAHAP 3 + 4c — Input & drag-drop untuk Kubika Blast.
+/// TAHAP 3 + 4 — Input, drag-drop, & preview-clear ala Block Blast.
 /// Tempel komponen ini ke GameObject "Game" yang SAMA dengan BlastGame.
 ///
-/// PENTING: DefaultExecutionOrder dibuat > 0 supaya BlastGame.Start() (yang
-/// memanggil Rebuild dan menghapus semua anak Game) jalan LEBIH DULU daripada
-/// BlastInput.Start(). Selain itu ghost root juga dibuat ulang otomatis kalau
-/// hilang (mis. setelah Rebuild), lihat EnsureGhostRoot().
+/// PENTING: DefaultExecutionOrder > 0 supaya BlastGame.Start() (Rebuild yang
+/// menghapus semua anak Game) jalan LEBIH DULU daripada BlastInput.Start().
+/// Ghost & preview root juga dibuat ulang otomatis kalau hilang (setelah Rebuild).
 ///
-/// MODEL MURNI SERET (cocok untuk HP):
-///  1. Pilih potongan tray (tap slot di UI, atau tombol 1/2/3, atau TAB).
-///  2. TEKAN & SERET jari di permukaan tabung. Ghost preview MUNCUL hanya setelah
-///     jari benar-benar BERGERAK melewati ambang (dragThreshold). Sekadar TAP /
-///     PENCET DIAM tidak akan menaruh apa pun.
-///  3. LEPAS jari di sel valid -> potongan ditaruh. Seret keluar tabung lalu lepas = BATAL.
-///  - Uncheck "Ghost Only While Dragging" kalau mau preview hover pakai mouse (desktop).
+/// MODEL MURNI SERET (HP):
+///  1. Pilih potongan tray (tap slot UI / tombol 1-2-3 / TAB).
+///  2. TEKAN & SERET jari di tabung. Ghost muncul HANYA setelah jari BERGERAK
+///     melewati dragThreshold. Tap/pencet diam TIDAK menaruh apa pun.
+///  3. Kalau posisi seret membuat cincin/kolom PENUH -> sel-sel yang akan hancur
+///     ikut MENYALA (preview clear ala Block Blast).
+///  4. LEPAS jari di sel valid -> potongan ditaruh. Seret keluar tabung = batal.
 ///
-/// Putar TABUNG: drag KLIK-KANAN, atau Q/E, atau panah Kiri/Kanan, atau DUA JARI.
-/// (Potongan sendiri TIDAK diputar - khas Block Blast.)
+/// Putar TABUNG: drag KLIK-KANAN / Q-E / panah / DUA JARI.
 /// </summary>
 [RequireComponent(typeof(BlastGame))]
 [DefaultExecutionOrder(1000)]
@@ -42,23 +40,30 @@ public class BlastInput : MonoBehaviour
     public float dragRotateSpeed = 0.3f;  // derajat / pixel (drag klik-kanan atau 2 jari)
 
     [Header("Perilaku ghost / drag")]
-    // true (HP): ghost hanya muncul saat MENYERET (jari menekan + bergerak).
-    // false (mouse desktop): ghost tampil saat pointer hover walau tak menekan.
+    // true (HP): ghost hanya muncul saat MENYERET. false (mouse): preview saat hover.
     public bool ghostOnlyWhileDragging = true;
     // Jarak minimal (pixel) jari harus bergerak agar dihitung MENYERET, bukan tap.
     public float dragThreshold = 12f;
 
-    [Header("Warna ghost preview (alpha = transparansi)")]
-    public Color validColor = new Color(0.35f, 0.90f, 0.40f, 0.50f);
-    public Color invalidColor = new Color(0.95f, 0.30f, 0.30f, 0.50f);
+    [Header("Warna ghost preview (alpha diabaikan, pakai ghostAlpha)")]
+    public Color validColor = new Color(0.35f, 0.90f, 0.40f, 1f);
+    public Color invalidColor = new Color(0.95f, 0.30f, 0.30f, 1f);
+    // Transparansi ghost. Dibuat KECIL supaya jelas beda dari blok terpasang (yang solid).
+    [Range(0.05f, 1f)] public float ghostAlpha = 0.25f;
+
+    [Header("Preview CLEAR ala Block Blast")]
+    public bool enableClearPreview = true;
+    // Warna nyala untuk sel yang AKAN hancur (baris/kolom penuh).
+    public Color clearPreviewColor = new Color(1f, 0.95f, 0.35f, 0.55f);
 
     BlastGame _game;
     Camera _cam;
 
     int _current = -1;                 // index potongan tray yang sedang dipilih
-    Material _matValid, _matInvalid;
-    Transform _ghostRoot;
+    Material _matValid, _matInvalid, _matPreview;
+    Transform _ghostRoot, _previewRoot;
     readonly List<GameObject> _ghosts = new List<GameObject>();
+    readonly List<GameObject> _previews = new List<GameObject>();
 
     // status drag-putar (klik-kanan)
     bool _rotating;
@@ -85,9 +90,14 @@ public class BlastInput : MonoBehaviour
     void Start()
     {
         _cam = Camera.main;
-        _matValid = MakeGhostMaterial(validColor);
-        _matInvalid = MakeGhostMaterial(invalidColor);
+        // Alpha ghost dipaksa = ghostAlpha (abaikan alpha pada validColor/invalidColor).
+        Color v = validColor; v.a = ghostAlpha;
+        Color iv = invalidColor; iv.a = ghostAlpha;
+        _matValid = MakeGhostMaterial(v, false);
+        _matInvalid = MakeGhostMaterial(iv, false);
+        _matPreview = MakeGhostMaterial(clearPreviewColor, true); // pakai emission -> menyala
         EnsureGhostRoot();
+        EnsurePreviewRoot();
         SelectFirstUnused();
     }
 
@@ -97,7 +107,8 @@ public class BlastInput : MonoBehaviour
         var core = _game.Core;
         if (core == null) return;
 
-        EnsureGhostRoot(); // buat ulang bila hilang (mis. setelah Rebuild tabung)
+        EnsureGhostRoot();   // buat ulang bila hilang (mis. setelah Rebuild tabung)
+        EnsurePreviewRoot();
 
         HandleRotation();
         HandleSelection();
@@ -133,16 +144,19 @@ public class BlastInput : MonoBehaviour
         {
             haveCell = true;
             canPlace = core.CanPlace(piece, col, row);
-            // ingat sel target terakhir supaya bisa ditaruh saat jari dilepas
             _lastCol = col; _lastRow = row; _lastCanPlace = canPlace; _hasLast = true;
         }
         else if (held)
         {
-            // menekan tapi belum menyeret / di luar sel tabung -> tidak ada target
-            _hasLast = false;
+            _hasLast = false; // menekan tapi belum menyeret / di luar sel -> tak ada target
         }
 
         SetGhost(haveCell, piece, col, row, canPlace);
+
+        // ---- preview CLEAR: sel yang akan hancur menyala ----
+        HashSet<(int, int)> clearSet =
+            (enableClearPreview && haveCell && canPlace) ? PredictClears(piece, col, row) : null;
+        SetClearPreview(clearSet);
 
         // LEPAS jari/klik -> taruh di sel valid terakhir (HANYA jika benar-benar menyeret).
         if (PointerReleased() && !_rotating && !multi)
@@ -162,7 +176,96 @@ public class BlastInput : MonoBehaviour
             }
             _hasLast = false;
             _isDragging = false; // reset untuk gestur berikutnya
+            SetClearPreview(null);
         }
+    }
+
+    // ================= PREDIKSI CLEAR (untuk preview) =================
+    // Cari sel-sel yang AKAN hancur seandainya potongan ditaruh di (col,row),
+    // TANPA mengubah grid asli. Aturan sama dengan BlastCore.ResolveClears:
+    // cincin (baris) penuh ATAU kolom penuh.
+    HashSet<(int, int)> PredictClears(BlastCore.Piece piece, int col, int row)
+    {
+        var core = _game.Core;
+        int C = core.Columns, H = core.Height;
+
+        var pieceCells = new HashSet<(int, int)>();
+        foreach (var (dx, dy) in piece.Cells)
+        {
+            int r = row + dy;
+            if (r < 0 || r >= H) continue;
+            pieceCells.Add((core.Wrap(col + dx), r));
+        }
+
+        // sel terisi = sudah ada blok ATAU akan ditutupi potongan ini
+        bool Occ(int c, int r) => core.Grid[c, r] != -1 || pieceCells.Contains((c, r));
+
+        var result = new HashSet<(int, int)>();
+
+        for (int r = 0; r < H; r++) // cincin/baris penuh
+        {
+            bool full = true;
+            for (int c = 0; c < C; c++) if (!Occ(c, r)) { full = false; break; }
+            if (full) for (int c = 0; c < C; c++) result.Add((c, r));
+        }
+        for (int c = 0; c < C; c++) // kolom penuh
+        {
+            bool full = true;
+            for (int r = 0; r < H; r++) if (!Occ(c, r)) { full = false; break; }
+            if (full) for (int r = 0; r < H; r++) result.Add((c, r));
+        }
+        return result;
+    }
+
+    void SetClearPreview(HashSet<(int, int)> cells)
+    {
+        EnsurePreviewRoot();
+        if (cells == null || cells.Count == 0)
+        {
+            for (int i = 0; i < _previews.Count; i++)
+                if (_previews[i] != null) _previews[i].SetActive(false);
+            return;
+        }
+
+        EnsurePreviews(cells.Count);
+        int used = 0;
+        foreach (var (c, r) in cells)
+        {
+            var g = _previews[used++];
+            g.SetActive(true);
+            g.transform.localPosition = _game.CellToWorld(c, r);
+            g.transform.localRotation = _game.CellRotation(c);
+            // sedikit lebih besar dari blok supaya "membungkus" -> efek menyala.
+            g.transform.localScale = new Vector3(_game.cellWidth * _game.gap * 1.06f,
+                                                 _game.cellHeight * _game.gap * 1.06f,
+                                                 _game.blockDepth * 1.14f);
+            g.GetComponent<MeshRenderer>().sharedMaterial = _matPreview;
+        }
+        for (int i = used; i < _previews.Count; i++)
+            if (_previews[i] != null) _previews[i].SetActive(false);
+    }
+
+    void EnsurePreviews(int n)
+    {
+        while (_previews.Count < n)
+        {
+            var go = new GameObject("ClearCube");
+            go.transform.SetParent(_previewRoot, false);
+            var mf = go.AddComponent<MeshFilter>();
+            mf.sharedMesh = _game.CellMesh;
+            go.AddComponent<MeshRenderer>();
+            go.SetActive(false);
+            _previews.Add(go);
+        }
+    }
+
+    void EnsurePreviewRoot()
+    {
+        if (_previewRoot != null) return;
+        var pr = new GameObject("ClearPreview").transform;
+        pr.SetParent(_game.transform, false); // anak Game -> ikut transform tabung
+        _previewRoot = pr;
+        _previews.Clear();
     }
 
     // ================= ROTASI TABUNG =================
@@ -170,13 +273,11 @@ public class BlastInput : MonoBehaviour
     {
         float deltaDeg = 0f;
 
-        // keyboard: Q/panah-kiri putar satu arah, E/panah-kanan arah sebaliknya
         float k = 0f;
         if (RotLeftHeld()) k += 1f;
         if (RotRightHeld()) k -= 1f;
         deltaDeg += k * keyRotateSpeed * Time.deltaTime;
 
-        // drag klik-kanan (desktop)
         if (RightDown()) { _rotating = true; _lastPointerX = PointerPosition().x; }
         if (RightUp()) _rotating = false;
         if (_rotating && RightHeld())
@@ -187,7 +288,6 @@ public class BlastInput : MonoBehaviour
             deltaDeg += -dx * dragRotateSpeed;
         }
 
-        // dua jari (touch)
         float twoFingerX = TwoFingerAvgDeltaX();
         if (Mathf.Abs(twoFingerX) > 0f) deltaDeg += -twoFingerX * dragRotateSpeed;
 
@@ -239,9 +339,7 @@ public class BlastInput : MonoBehaviour
         SelectFirstUnused();
     }
 
-    // ================= RAYCAST -> SEL GRID (kebalikan CellToWorld) =================
-    // Silinder blok: x^2 + z^2 = R^2 (di ruang LOKAL BlastGame). Kita cari titik
-    // permukaan terdekat ke kamera, lalu ubah jadi (col,row).
+    // ================= RAYCAST -> SEL GRID =================
     bool PointerToCell(out int col, out int row)
     {
         col = 0; row = 0;
@@ -252,27 +350,26 @@ public class BlastInput : MonoBehaviour
 
         Ray ray = _cam.ScreenPointToRay(PointerPosition());
 
-        // ubah ray ke ruang lokal BlastGame supaya rotasi tabung ikut diperhitungkan
         Vector3 o = _game.transform.InverseTransformPoint(ray.origin);
         Vector3 d = _game.transform.InverseTransformDirection(ray.direction);
         d.Normalize();
 
         float a = d.x * d.x + d.z * d.z;
-        if (a < 1e-6f) return false; // ray hampir sejajar sumbu tabung
+        if (a < 1e-6f) return false;
         float b = 2f * (o.x * d.x + o.z * d.z);
         float c = o.x * o.x + o.z * o.z - R * R;
         float disc = b * b - 4f * a * c;
-        if (disc < 0f) return false; // tidak kena silinder
+        if (disc < 0f) return false;
 
         float sq = Mathf.Sqrt(disc);
-        float t0 = (-b - sq) / (2f * a); // permukaan depan (dekat kamera)
-        float t1 = (-b + sq) / (2f * a); // permukaan belakang
+        float t0 = (-b - sq) / (2f * a);
+        float t1 = (-b + sq) / (2f * a);
         float t = t0 >= 0f ? t0 : t1;
         if (t < 0f) return false;
 
         Vector3 hit = o + d * t;
 
-        float ang = Mathf.Atan2(hit.z, hit.x);      // sama seperti sudut di CellToWorld
+        float ang = Mathf.Atan2(hit.z, hit.x);
         int cc = Mathf.RoundToInt(ang / (2f * Mathf.PI) * _game.columns);
         col = _game.Core.Wrap(cc);
 
@@ -283,16 +380,13 @@ public class BlastInput : MonoBehaviour
     }
 
     // ================= GHOST PREVIEW =================
-    // Pastikan ghost root ADA dan menjadi anak Game (ikut posisi + rotasi tabung).
-    // Unity meng-overload operator== sehingga objek yang sudah di-Destroy terbaca
-    // sebagai null -> aman dipakai untuk mendeteksi ghost yang terhapus Rebuild.
     void EnsureGhostRoot()
     {
         if (_ghostRoot != null) return;
         var gr = new GameObject("Ghost").transform;
-        gr.SetParent(_game.transform, false); // anak Game -> ikut transform tabung
+        gr.SetParent(_game.transform, false);
         _ghostRoot = gr;
-        _ghosts.Clear(); // ghost cube lama sudah ikut terhapus bersama root lama
+        _ghosts.Clear();
     }
 
     void SetGhost(bool show, BlastCore.Piece piece, int col, int row, bool canPlace)
@@ -311,13 +405,11 @@ public class BlastInput : MonoBehaviour
         foreach (var (dx, dy) in piece.Cells)
         {
             int r = row + dy;
-            if (r < 0 || r >= _game.height) continue; // di luar tinggi tabung -> tak digambar
+            if (r < 0 || r >= _game.height) continue;
             int c = _game.Core.Wrap(col + dx);
 
             var g = _ghosts[used++];
             g.SetActive(true);
-            // localPosition RELATIF ke ghost root (anak Game) = ruang lokal tabung,
-            // sama persis dengan blok terpasang -> posisi selalu sinkron.
             g.transform.localPosition = _game.CellToWorld(c, r);
             g.transform.localRotation = _game.CellRotation(c);
             g.transform.localScale = new Vector3(_game.cellWidth * _game.gap,
@@ -343,24 +435,30 @@ public class BlastInput : MonoBehaviour
         }
     }
 
-    // Material semi-transparan untuk ghost (URP Lit; fallback Standard).
-    Material MakeGhostMaterial(Color col)
+    // Material semi-transparan (URP Lit; fallback Standard). withEmission -> menyala.
+    Material MakeGhostMaterial(Color col, bool withEmission)
     {
         var shader = Shader.Find("Universal Render Pipeline/Lit");
         if (shader == null) shader = Shader.Find("Standard");
         var m = new Material(shader);
 
-        if (m.HasProperty("_Surface")) m.SetFloat("_Surface", 1f); // 0=opaque, 1=transparent
+        if (m.HasProperty("_Surface")) m.SetFloat("_Surface", 1f); // transparan
         m.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
         m.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
         m.SetInt("_ZWrite", 0);
         m.DisableKeyword("_SURFACE_TYPE_OPAQUE");
         m.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
-        m.EnableKeyword("_ALPHABLEND_ON"); // untuk fallback Standard
+        m.EnableKeyword("_ALPHABLEND_ON");
         m.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
 
         if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", col);
         m.color = col;
+
+        if (withEmission && m.HasProperty("_EmissionColor"))
+        {
+            m.EnableKeyword("_EMISSION");
+            m.SetColor("_EmissionColor", new Color(col.r, col.g, col.b) * 0.9f);
+        }
         return m;
     }
 
@@ -380,7 +478,7 @@ public class BlastInput : MonoBehaviour
 #endif
     }
 
-    bool PointerPressedThisFrame() // klik kiri / jari BARU menekan frame ini
+    bool PointerPressedThisFrame()
     {
 #if USE_NEW_INPUT
         var m = Mouse.current;
@@ -393,7 +491,7 @@ public class BlastInput : MonoBehaviour
 #endif
     }
 
-    bool PointerHeld() // klik kiri / jari sedang menekan
+    bool PointerHeld()
     {
 #if USE_NEW_INPUT
         var m = Mouse.current;
@@ -406,7 +504,7 @@ public class BlastInput : MonoBehaviour
 #endif
     }
 
-    bool PointerReleased() // klik kiri dilepas / tap selesai
+    bool PointerReleased()
     {
 #if USE_NEW_INPUT
         var m = Mouse.current;
@@ -419,7 +517,7 @@ public class BlastInput : MonoBehaviour
 #endif
     }
 
-    bool MultiTouchActive() // >= 2 jari menyentuh layar (gestur putar)
+    bool MultiTouchActive()
     {
 #if USE_NEW_INPUT
         var ts = Touchscreen.current;
