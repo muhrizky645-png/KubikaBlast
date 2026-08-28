@@ -32,7 +32,7 @@ public class BlastGame : MonoBehaviour
 
     [Header("Kamera (auto-fit, di-frame SEKALI saja)")]
     public bool autoCamera = true;          // UNCHECK untuk pakai kamera manualmu (tak akan disentuh)
-    public float cameraFitPadding = 1.1f;   // >1 = kamera agak mundur biar tabung tak mepet tepi
+    public float cameraZoomOut = 1.25f;     // >1 = kamera mundur (zoom-out). Naikkan kalau mau lebih jauh.
     public float cameraTilt = 12f;          // derajat kamera menunduk (0 = lurus dari samping)
     public float cameraAimHeight = 0.45f;   // 0=dasar tabung, 1=puncak; titik yang dibidik kamera
 
@@ -90,7 +90,7 @@ public class BlastGame : MonoBehaviour
         RenderGrid();
     }
 
-    /// <summary>Paksa atur ulang kamera auto-fit (mis. setelah ganti ukuran papan).</summary>
+    /// <summary>Paksa atur ulang kamera auto-fit (mis. setelah ganti ukuran papan / posisi tabung).</summary>
     [ContextMenu("Frame Camera (auto-fit sekali)")]
     public void FrameCameraNow()
     {
@@ -213,16 +213,18 @@ public class BlastGame : MonoBehaviour
     }
 
     // ===== Kamera AUTO-FIT + view fixed (menunduk dari depan-atas) =====
-    // Memperhitungkan FOV kamera + rasio layar (penting untuk layar HP portrait),
-    // lalu tempatkan kamera pada sudut tetap yang enak dilihat. Dipanggil SEKALI.
+    // Membidik POSISI TABUNG SEBENARNYA (transform.position), bukan titik nol dunia,
+    // supaya selalu center walau GameObject Game tidak di (0,0,0).
+    // Memperhitungkan FOV + rasio layar. Dipanggil SEKALI.
     void SetupCamera()
     {
         var cam = Camera.main;
         if (cam == null) return;
 
         float totalH = height * cellHeight;
-        float aimY = totalH * Mathf.Clamp01(cameraAimHeight); // titik yang dibidik
-        Vector3 target = new Vector3(0f, aimY, 0f);
+        Vector3 basePos = transform.position; // posisi dunia tabung (dasar tabung)
+        float aimY = totalH * Mathf.Clamp01(cameraAimHeight);
+        Vector3 target = new Vector3(basePos.x, basePos.y + aimY, basePos.z); // titik yang dibidik
 
         // setengah-ukuran tabung yang harus muat di layar
         float halfH = totalH / 2f + flangeThickness;   // arah tinggi
@@ -234,7 +236,7 @@ public class BlastGame : MonoBehaviour
 
         float distForHeight = halfH / Mathf.Max(0.0001f, tanV);
         float distForWidth = halfW / Mathf.Max(0.0001f, tanH);
-        float dist = Mathf.Max(distForHeight, distForWidth) * cameraFitPadding;
+        float dist = Mathf.Max(distForHeight, distForWidth) * Mathf.Max(0.1f, cameraZoomOut);
 
         // posisi kamera: mundur di -Z lalu naik sesuai sudut tunduk (tilt)
         float rad = cameraTilt * Mathf.Deg2Rad;
