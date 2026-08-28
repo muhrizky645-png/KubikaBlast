@@ -52,15 +52,14 @@ public class BlastGame : MonoBehaviour
     public bool demoFill = false;           // isi grid contoh (dulu Tahap 2). Default OFF.
 
     [Header("Blok default saat mulai (starting fill)")]
-    // Isi sebagian tabung dengan blok bawaan SETIAP kali mulai / Restart.
+    // Isi tabung dengan POLA blok bawaan SETIAP kali mulai / Restart.
+    // Blok tersebar RATA di seluruh tabung (bukan menumpuk dari bawah), ala Block Blast.
     public bool startWithBlocks = true;
-    // Jumlah baris dari BAWAH yang diisi blok bawaan.
-    public int startRows = 3;
-    // Kepadatan isian (0..1). 0.45 = kira-kira 45% sel terisi.
+    // Kepadatan isian untuk pola "scatter" (0..1). 0.45 = kira-kira 45% sel terisi.
     [Range(0f, 1f)] public float startFillChance = 0.45f;
     // true = warna acak; false = warna mengikuti kolom (pola pelangi rapi).
     public bool startRandomColors = true;
-    // 0 = acak tiap mulai. Selain 0 = pola TETAP (reproducible) tiap Restart.
+    // 0 = pola acak & BERUBAH tiap masuk game. Selain 0 = pola TETAP (reproducible).
     public int startSeed = 0;
 
     public Color[] palette;
@@ -111,7 +110,7 @@ public class BlastGame : MonoBehaviour
         if (autoCamera && !_cameraFramed) { SetupCamera(); _cameraFramed = true; }
 
         if (demoFill) DemoFill();                  // hanya untuk debug; default OFF di Tahap 3
-        else if (startWithBlocks) StartingFill();  // blok bawaan tiap mulai / Restart
+        else if (startWithBlocks) StartingFill();  // pola blok bawaan tiap mulai / Restart
         RenderGrid();
     }
 
@@ -442,43 +441,95 @@ public class BlastGame : MonoBehaviour
         for (int r = 0; r < 4; r++) _core.Grid[3, r] = 2;
     }
 
-    // ===== Blok DEFAULT saat mulai / Restart (starting fill) =====
-    // Mengisi sebagian baris paling BAWAH tabung dengan blok berwarna supaya papan
-    // tidak kosong saat game dimulai. Dirancang agar TIDAK memicu clear otomatis:
-    // tiap cincin (baris) dijamin menyisakan minimal satu sel kosong, dan tiap
-    // kolom juga dijaga tidak penuh.
+    // ===== Blok DEFAULT saat mulai / Restart = POLA acak flat (ala Block Blast) =====
+    // Mengisi SELURUH tabung (bukan menumpuk dari bawah) dengan salah satu POLA yang
+    // dipilih ACAK tiap mulai game -> tampilan selalu berbeda & menarik.
+    // Dijaga agar TIDAK memicu clear otomatis: tak ada cincin (baris) atau kolom penuh.
     void StartingFill()
     {
-        int rows = Mathf.Clamp(startRows, 0, height);
-        if (rows <= 0 || numColors <= 0) return;
+        if (numColors <= 0) return;
 
         var rng = startSeed != 0 ? new System.Random(startSeed) : new System.Random();
+
+        // pastikan bersih dulu
+        for (int c = 0; c < columns; c++)
+            for (int r = 0; r < height; r++)
+                _core.Grid[c, r] = -1;
+
+        // pilih pola acak -> tiap masuk game beda (kalau startSeed = 0)
+        int pattern = rng.Next(7);
         float chance = Mathf.Clamp01(startFillChance);
 
-        for (int r = 0; r < rows; r++)
+        for (int c = 0; c < columns; c++)
         {
-            // Satu sel dipaksa KOSONG per cincin -> cincin tak pernah langsung penuh.
-            int forcedEmpty = rng.Next(columns);
-            for (int c = 0; c < columns; c++)
+            for (int r = 0; r < height; r++)
             {
-                if (c == forcedEmpty) { _core.Grid[c, r] = -1; continue; }
-                if (rng.NextDouble() <= chance)
+                bool fill = false;
+                switch (pattern)
                 {
-                    int color = startRandomColors ? rng.Next(numColors) : c % numColors;
-                    _core.Grid[c, r] = color;
+                    case 0: // scatter flat (blok tersebar di mana saja)
+                        fill = rng.NextDouble() <= chance;
+                        break;
+                    case 1: // garis vertikal (kolom selang-seling)
+                        fill = (c % 2 == 0) && rng.NextDouble() <= 0.85;
+                        break;
+                    case 2: // pita horizontal (baris selang-seling)
+                        fill = (r % 2 == 0) && rng.NextDouble() <= 0.85;
+                        break;
+                    case 3: // papan catur
+                        fill = ((c + r) % 2 == 0);
+                        break;
+                    case 4: // diagonal melingkar di tabung
+                        fill = ((c + r) % 3 == 0);
+                        break;
+                    case 5: // gelombang sinus (naik-turun keliling tabung)
+                    {
+                        float wave = (Mathf.Sin((float)c / columns * Mathf.PI * 4f) * 0.5f + 0.5f) * (height - 1);
+                        fill = Mathf.Abs(r - wave) <= 1.2f;
+                        break;
+                    }
+                    default: // 6: gumpalan/cluster acak (diisi terpisah di bawah)
+                        fill = false;
+                        break;
                 }
-                else _core.Grid[c, r] = -1;
+                if (fill)
+                    _core.Grid[c, r] = startRandomColors ? rng.Next(numColors) : (c % numColors);
             }
         }
 
-        // Jaga-jaga: kalau ada kolom yang kebetulan penuh (mis. startRows = height),
-        // kosongkan satu selnya supaya tak langsung ter-clear saat mulai.
+        if (pattern == 6) FillClusters(rng);
+
+        // ==== PENGAMAN: jangan sampai ada cincin/kolom PENUH (biar tak auto-clear) ====
+        for (int r = 0; r < height; r++)
+        {
+            bool full = true;
+            for (int c = 0; c < columns; c++) if (_core.Grid[c, r] == -1) { full = false; break; }
+            if (full) _core.Grid[rng.Next(columns), r] = -1;
+        }
         for (int c = 0; c < columns; c++)
         {
             bool full = true;
-            for (int r = 0; r < height; r++)
-                if (_core.Grid[c, r] == -1) { full = false; break; }
+            for (int r = 0; r < height; r++) if (_core.Grid[c, r] == -1) { full = false; break; }
             if (full) _core.Grid[c, rng.Next(height)] = -1;
+        }
+    }
+
+    // Pola "cluster": beberapa gumpalan blok kecil tersebar acak di seluruh tabung.
+    void FillClusters(System.Random rng)
+    {
+        int blobs = Mathf.Max(3, (columns * height) / 20);
+        for (int b = 0; b < blobs; b++)
+        {
+            int cc = rng.Next(columns);
+            int rr = rng.Next(height);
+            int color = startRandomColors ? rng.Next(numColors) : (cc % numColors);
+            int size = 3 + rng.Next(5);
+            for (int s = 0; s < size; s++)
+            {
+                int c = _core.Wrap(cc + rng.Next(3) - 1);
+                int r = Mathf.Clamp(rr + rng.Next(3) - 1, 0, height - 1);
+                _core.Grid[c, r] = color;
+            }
         }
     }
 }
