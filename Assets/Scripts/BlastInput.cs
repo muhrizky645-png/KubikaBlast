@@ -1,6 +1,6 @@
 // Dukung DUA backend input Unity: Input Manager (lama) & Input System (baru).
 // Kalau project cuma pakai Input System baru (default Unity 6 URP), branch
-// USE_NEW_INPUT yang dipakai. Kalau ada Input Manager lama (atau \"Both\"),
+// USE_NEW_INPUT yang dipakai. Kalau ada Input Manager lama (atau "Both"),
 // pakai API lama. Jadi script ini jalan tanpa perlu ubah Player Settings.
 #if ENABLE_INPUT_SYSTEM && !ENABLE_LEGACY_INPUT_MANAGER
 #define USE_NEW_INPUT
@@ -14,8 +14,8 @@ using UnityEngine.InputSystem;
 using KubikaBlast;
 
 /// <summary>
-/// TAHAP 3 + 4 — Input, drag-drop, & preview-clear ala Block Blast.
-/// Tempel komponen ini ke GameObject \"Game\" yang SAMA dengan BlastGame.
+/// TAHAP 3 + 4 + 5 — Input, drag-drop, blok melayang, & preview-clear ala Block Blast.
+/// Tempel komponen ini ke GameObject "Game" yang SAMA dengan BlastGame.
 ///
 /// PENTING: DefaultExecutionOrder > 0 supaya BlastGame.Start() (Rebuild yang
 /// menghapus semua anak Game) jalan LEBIH DULU daripada BlastInput.Start().
@@ -23,7 +23,9 @@ using KubikaBlast;
 ///
 /// MODEL MURNI SERET-DARI-TRAY (HP) ala Block Blast:
 ///  1. TEKAN jari TEPAT di potongan tray yang diinginkan (BUKAN di tabung).
-///  2. Tanpa melepas, SERET jari ke tabung. Ghost mengikuti sel di bawah jari.
+///  2. Tanpa melepas, SERET jari ke tabung. Selama menyeret, potongan tampak
+///     "MELAYANG" mengikuti jari. Ghost di tabung HANYA muncul saat posisi PAS
+///     (valid); kalau belum pas, hanya blok melayang yang terlihat.
 ///  3. Kalau posisi seret membuat cincin/kolom PENUH -> sel yang akan hancur
 ///     ikut MENYALA (preview clear ala Block Blast).
 ///  4. LEPAS jari di sel valid -> potongan ditaruh. Lepas di luar tabung = batal.
@@ -57,6 +59,14 @@ public class BlastInput : MonoBehaviour
     // Warna nyala untuk sel yang AKAN hancur (baris/kolom penuh).
     public Color clearPreviewColor = new Color(1f, 0.95f, 0.35f, 0.55f);
 
+    [Header("Blok melayang saat diseret (poin 1)")]
+    // Saat menyeret dari tray, potongan tampak MELAYANG mengikuti jari.
+    public bool enableHeldPiece = true;
+    // Offset ke ATAS (pixel) supaya blok melayang di atas jari, tak ketutup jari.
+    public float heldScreenYOffset = 90f;
+    // Skala blok melayang relatif ukuran sel (1 = sama seperti blok tabung).
+    public float heldScale = 1f;
+
     BlastGame _game;
     Camera _cam;
 
@@ -66,6 +76,11 @@ public class BlastInput : MonoBehaviour
     readonly List<GameObject> _ghosts = new List<GameObject>();
     readonly List<GameObject> _previews = new List<GameObject>();
 
+    // blok melayang (poin 1): TIDAK di-parent ke tabung supaya tak ikut berputar.
+    Transform _heldRoot;
+    readonly List<GameObject> _held = new List<GameObject>();
+    readonly Dictionary<int, Material> _solidMats = new Dictionary<int, Material>();
+
     // status drag-putar (klik-kanan)
     bool _rotating;
     float _lastPointerX;
@@ -74,7 +89,7 @@ public class BlastInput : MonoBehaviour
     Vector2 _pressStartPos;
     bool _isDragging;
     // true HANYA jika gestur menekan ini DIMULAI tepat di atas slot tray.
-    // Inilah gerbang \"seret-dari-tray\": menekan tabung -> false -> tak bisa menaruh.
+    // Inilah gerbang "seret-dari-tray": menekan tabung -> false -> tak bisa menaruh.
     bool _dragFromTray;
 
     // target terakhir saat menyeret -> dipakai untuk menaruh saat jari dilepas
@@ -102,6 +117,7 @@ public class BlastInput : MonoBehaviour
         _matPreview = MakeGhostMaterial(clearPreviewColor, true); // pakai emission -> menyala
         EnsureGhostRoot();
         EnsurePreviewRoot();
+        EnsureHeldRoot();
         SelectFirstUnused();
     }
 
@@ -113,6 +129,7 @@ public class BlastInput : MonoBehaviour
 
         EnsureGhostRoot();   // buat ulang bila hilang (mis. setelah Rebuild tabung)
         EnsurePreviewRoot();
+        EnsureHeldRoot();
 
         HandleRotation();
         HandleSelection();
@@ -130,7 +147,7 @@ public class BlastInput : MonoBehaviour
             _pressStartPos = PointerPosition();
             _isDragging = false;
             int slot = BlastUI.TraySlotAtPointer(_pressStartPos);
-            if (slot >= 0) { TrySelect(slot); _dragFromTray = true; }  // \"angkat\" potongan dari tray
+            if (slot >= 0) { TrySelect(slot); _dragFromTray = true; }  // "angkat" potongan dari tray
             else _dragFromTray = false;                                 // tekan tabung/lainnya -> tak bisa menaruh
         }
         // deteksi seret sungguhan (bukan tap): jari sudah bergerak cukup jauh?
@@ -161,7 +178,10 @@ public class BlastInput : MonoBehaviour
             _hasLast = false; // menekan tapi belum menyeret / di luar sel -> tak ada target
         }
 
-        SetGhost(haveCell, piece, col, row, canPlace);
+        // Ghost HANYA muncul saat posisi PAS (valid). Selain itu, cukup blok melayang.
+        SetGhost(haveCell && canPlace, piece, col, row, canPlace);
+        // Poin 1: blok melayang mengikuti jari selama menyeret dari tray.
+        SetHeldPiece(enableHeldPiece && active, piece);
 
         // ---- preview CLEAR: sel yang akan hancur menyala ----
         HashSet<(int, int)> clearSet =
@@ -190,6 +210,7 @@ public class BlastInput : MonoBehaviour
             _isDragging = false;   // reset untuk gestur berikutnya
             _dragFromTray = false; // gerbang tray ditutup lagi
             SetClearPreview(null);
+            SetHeldPiece(false, null); // sembunyikan blok melayang setelah dilepas
         }
     }
 
@@ -248,7 +269,7 @@ public class BlastInput : MonoBehaviour
             g.SetActive(true);
             g.transform.localPosition = _game.CellToWorld(c, r);
             g.transform.localRotation = _game.CellRotation(c);
-            // sedikit lebih besar dari blok supaya \"membungkus\" -> efek menyala.
+            // sedikit lebih besar dari blok supaya "membungkus" -> efek menyala.
             g.transform.localScale = new Vector3(_game.cellWidth * _game.gap * 1.06f,
                                                  _game.cellHeight * _game.gap * 1.06f,
                                                  _game.blockDepth * 1.14f);
@@ -446,6 +467,86 @@ public class BlastInput : MonoBehaviour
             go.SetActive(false);
             _ghosts.Add(go);
         }
+    }
+
+    // ================= BLOK MELAYANG (poin 1) =================
+    void EnsureHeldRoot()
+    {
+        if (_heldRoot != null) return;
+        var hr = new GameObject("HeldPiece").transform;
+        // sengaja TANPA parent tabung supaya tidak ikut berputar bersama tabung.
+        _heldRoot = hr;
+        _held.Clear();
+    }
+
+    void SetHeldPiece(bool show, BlastCore.Piece piece)
+    {
+        EnsureHeldRoot();
+        if (!show || piece == null || _cam == null)
+        {
+            for (int i = 0; i < _held.Count; i++)
+                if (_held[i] != null) _held[i].SetActive(false);
+            return;
+        }
+
+        // Titik dunia di depan kamera, sejajar posisi jari (dengan offset ke ATAS
+        // supaya blok melayang tidak tertutup jari).
+        Vector2 sp = PointerPosition();
+        sp.y += heldScreenYOffset;
+        float depth = Vector3.Distance(
+            _cam.transform.position,
+            _game.transform.position + Vector3.up * (_game.height * _game.cellHeight * 0.5f));
+        Vector3 basePos = _cam.ScreenToWorldPoint(new Vector3(sp.x, sp.y, depth));
+
+        Vector3 right = _cam.transform.right;
+        Vector3 up = _cam.transform.up;
+        Quaternion rot = _cam.transform.rotation;
+        float step = _game.cellWidth * heldScale;
+
+        EnsureHeld(piece.Cells.Length);
+        int used = 0;
+        foreach (var (dx, dy) in piece.Cells)
+        {
+            var g = _held[used++];
+            g.SetActive(true);
+            g.transform.position = basePos + right * (dx * step) + up * (dy * step);
+            g.transform.rotation = rot;
+            g.transform.localScale = new Vector3(_game.cellWidth * _game.gap * heldScale,
+                                                 _game.cellHeight * _game.gap * heldScale,
+                                                 _game.blockDepth * heldScale);
+            g.GetComponent<MeshRenderer>().sharedMaterial = SolidMat(piece.Color);
+        }
+        for (int i = used; i < _held.Count; i++)
+            if (_held[i] != null) _held[i].SetActive(false);
+    }
+
+    void EnsureHeld(int n)
+    {
+        while (_held.Count < n)
+        {
+            var go = new GameObject("HeldCube");
+            go.transform.SetParent(_heldRoot, false);
+            var mf = go.AddComponent<MeshFilter>();
+            mf.sharedMesh = _game.CellMesh;
+            go.AddComponent<MeshRenderer>();
+            go.SetActive(false);
+            _held.Add(go);
+        }
+    }
+
+    // Material SOLID (opaque) berwarna asli potongan, dipakai untuk blok melayang.
+    Material SolidMat(int color)
+    {
+        if (_solidMats.TryGetValue(color, out var found) && found != null) return found;
+        var shader = Shader.Find("Universal Render Pipeline/Lit");
+        if (shader == null) shader = Shader.Find("Standard");
+        var m = new Material(shader);
+        Color c = (_game.palette != null && color >= 0 && color < _game.palette.Length)
+                  ? _game.palette[color] : Color.white;
+        if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", c);
+        m.color = c;
+        _solidMats[color] = m;
+        return m;
     }
 
     // Material semi-transparan (URP Lit; fallback Standard). withEmission -> menyala.

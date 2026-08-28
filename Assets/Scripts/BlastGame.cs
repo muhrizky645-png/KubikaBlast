@@ -1,11 +1,12 @@
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using KubikaBlast;
 
 /// <summary>
 /// Render TABUNG 3D gaya gulungan kabel + kubus dari BlastCore.
 /// Tahap 2: render statis. Tahap 3: hook untuk BlastInput. Tahap 4: efek clear
-/// + Restart (Rebuild) dipakai oleh BlastUI.
+/// + Restart (Rebuild) dipakai oleh BlastUI. Tahap 5: clear BERURUTAN satu-per-satu.
 ///
 /// Tempel ke GameObject kosong (mis. "Game"), lalu tambahkan juga komponen
 /// BlastInput (kontrol) dan BlastUI (antarmuka) agar game utuh.
@@ -37,9 +38,12 @@ public class BlastGame : MonoBehaviour
     public float cameraTilt = 12f;          // derajat kamera menunduk (0 = lurus dari samping)
     public float cameraAimHeight = 0.45f;   // 0=dasar tabung, 1=puncak; titik yang dibidik kamera
 
-    [Header("Efek clear (Tahap 4)")]
+    [Header("Efek clear (Tahap 4 + 5)")]
     public bool enableClearFx = true;       // percikan kubus saat baris/kolom hancur
     public float clearFxDuration = 0.4f;
+    // Jeda antar sel saat hancur BERURUTAN satu-per-satu (gaya Tetris3D).
+    // 0 = serempak (semua sekaligus). ~0.05-0.08 = gelombang halus.
+    public float clearStepDelay = 0.06f;
 
     [Header("Debug")]
     public bool demoFill = false;           // isi grid contoh (dulu Tahap 2). Default OFF.
@@ -223,28 +227,66 @@ public class BlastGame : MonoBehaviour
         mr.sharedMaterial = _mats[color % _mats.Length];
     }
 
-    // ===== Efek "blast" saat baris/kolom hancur (Tahap 4) =====
+    // ===== Efek "blast" saat baris/kolom hancur (Tahap 4 + 5) =====
+    // Tahap 5: hancur BERURUTAN satu-per-satu. Semua kubus Fx dibuat DULU
+    // (menggantikan blok yang baru hilang supaya papan tak langsung kosong),
+    // lalu animasi hancurnya dimulai SATU PER SATU dengan jeda clearStepDelay.
+    // Urutan: baris bawah->atas, dalam satu baris kiri->kanan (keliling).
     void SpawnClearEffect(BlastCore.ClearInfo clear)
     {
         if (!Application.isPlaying) return;
         if (clear.Cells == null || clear.Cells.Count == 0) return;
 
-        foreach (var cell in clear.Cells)
+        // Snapshot data (c,r,color) supaya aman walau LastClear berubah nanti.
+        int n = clear.Cells.Count;
+        var cc = new int[n];
+        var rr = new int[n];
+        var colr = new int[n];
+        for (int i = 0; i < n; i++)
         {
+            cc[i] = clear.Cells[i].c;
+            rr[i] = clear.Cells[i].r;
+            colr[i] = clear.Cells[i].color;
+        }
+
+        // urutan hancur: baris bawah->atas, dalam baris kiri->kanan (keliling).
+        var order = new List<int>(n);
+        for (int i = 0; i < n; i++) order.Add(i);
+        order.Sort((x, y) => rr[x] != rr[y] ? rr[x].CompareTo(rr[y]) : cc[x].CompareTo(cc[y]));
+
+        // Spawn SEMUA kubus Fx sekarang (statis dulu), lalu animasikan berurutan.
+        var gos = new List<GameObject>(n);
+        var mrs = new List<MeshRenderer>(n);
+        var mats = new List<Material>(n);
+        for (int k = 0; k < order.Count; k++)
+        {
+            int i = order[k];
             var go = new GameObject("Fx");
             go.transform.SetParent(transform, false);        // anak Game -> ikut rotasi tabung
-            go.transform.localPosition = CellToWorld(cell.c, cell.r);
-            go.transform.localRotation = CellRotation(cell.c);
+            go.transform.localPosition = CellToWorld(cc[i], rr[i]);
+            go.transform.localRotation = CellRotation(cc[i]);
             go.transform.localScale = new Vector3(cellWidth * gap, cellHeight * gap, blockDepth);
 
             var mf = go.AddComponent<MeshFilter>();
             mf.sharedMesh = _mesh;
             var mr = go.AddComponent<MeshRenderer>();
-            Color baseC = (palette != null && cell.color >= 0 && cell.color < palette.Length)
-                          ? palette[cell.color] : Color.white;
+            Color baseC = (palette != null && colr[i] >= 0 && colr[i] < palette.Length)
+                          ? palette[colr[i]] : Color.white;
             mr.material = MakeFxMaterial(baseC);
 
-            StartCoroutine(AnimateFx(go, mr, mr.material));
+            gos.Add(go); mrs.Add(mr); mats.Add(mr.material);
+        }
+
+        StartCoroutine(ClearSequence(gos, mrs, mats));
+    }
+
+    IEnumerator ClearSequence(List<GameObject> gos, List<MeshRenderer> mrs, List<Material> mats)
+    {
+        float delay = Mathf.Max(0f, clearStepDelay);
+        for (int k = 0; k < gos.Count; k++)
+        {
+            if (gos[k] != null) StartCoroutine(AnimateFx(gos[k], mrs[k], mats[k]));
+            if (delay > 0f) yield return new WaitForSeconds(delay);
         }
     }
 
