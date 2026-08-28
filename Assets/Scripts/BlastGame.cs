@@ -34,8 +34,11 @@ public class BlastGame : MonoBehaviour
 
     [Header("Kamera (auto-fit, di-frame SEKALI saja)")]
     public bool autoCamera = true;          // UNCHECK untuk pakai kamera manualmu (tak akan disentuh)
+    // FOV vertikal kamera. Kecil (mis. 30-35) = perspektif lebih FLAT/seragam (ala Block Blast),
+    // auto-fit otomatis memundurkan kamera biar tabung tetap muat. Besar = lebih "lebar"/melengkung.
+    public float cameraFov = 35f;
     public float cameraZoomOut = 1.25f;     // >1 = kamera mundur (zoom-out). Naikkan kalau mau lebih jauh.
-    public float cameraTilt = 12f;          // derajat kamera menunduk (0 = lurus dari samping)
+    public float cameraTilt = 6f;           // derajat kamera menunduk (0 = lurus dari samping)
     public float cameraAimHeight = 0.45f;   // 0=dasar tabung, 1=puncak; titik yang dibidik kamera
 
     [Header("Efek clear (Tahap 4 + 5)")]
@@ -345,6 +348,9 @@ public class BlastGame : MonoBehaviour
     {
         var cam = Camera.main;
         if (cam == null) return;
+
+        // Pakai FOV yang kita tentukan -> perspektif konsisten & bisa dibikin flat.
+        cam.fieldOfView = Mathf.Clamp(cameraFov, 5f, 120f);
 
         float totalH = height * cellHeight;
         Vector3 basePos = transform.position; // posisi dunia tabung (dasar tabung)
