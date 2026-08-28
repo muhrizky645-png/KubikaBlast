@@ -25,9 +25,10 @@ using KubikaBlast;
 ///  1. TEKAN jari TEPAT di potongan tray yang diinginkan (BUKAN di tabung).
 ///  2. Tanpa melepas, SERET jari ke tabung. Selama menyeret, potongan tampak
 ///     "MELAYANG" sebagai OVERLAY di permukaan layar (mengikuti jari, rata,
-///     menghadap kamera). Ukuran blok melayang DISAMAKAN dengan blok asli di
-///     tabung -> seperti "bayangan" blok itu. Ghost di tabung HANYA muncul saat
-///     posisi PAS (valid), dan warnanya SAMA dengan warna balok.
+///     menghadap kamera), seukuran blok asli. Di tabung TIDAK ada balok
+///     berwarna kembar; yang muncul cuma INDIKATOR SEL TUJUAN yang halus
+///     (highlight tipis) dan HANYA saat posisi PAS. Indikator ini dipusatkan
+///     tepat di bawah jari (tidak geser).
 ///  3. Kalau posisi seret membuat cincin/kolom PENUH -> sel yang akan hancur
 ///     ikut MENYALA (preview clear ala Block Blast).
 ///  4. LEPAS jari di sel valid -> potongan ditaruh. Lepas di luar tabung = batal.
@@ -50,12 +51,10 @@ public class BlastInput : MonoBehaviour
     // Jarak minimal (pixel) jari harus bergerak agar dihitung MENYERET, bukan tap.
     public float dragThreshold = 12f;
 
-    [Header("Ghost preview (warna mengikuti warna balok)")]
-    // Ghost sekarang diwarnai dari palette balok; dua warna ini hanya cadangan.
-    public Color validColor = new Color(0.35f, 0.90f, 0.40f, 1f);
-    public Color invalidColor = new Color(0.95f, 0.30f, 0.30f, 1f);
-    // Transparansi ghost. Dibuat KECIL supaya jelas beda dari blok terpasang (yang solid).
-    [Range(0.05f, 1f)] public float ghostAlpha = 0.35f;
+    [Header("Indikator sel tujuan (gaya Block Blast)")]
+    // Highlight HALUS di sel tempat potongan akan mendarat (bukan balok berwarna penuh).
+    // Alpha kecil = tipis/tidak mengganggu. Dipakai HANYA saat posisi PAS.
+    public Color ghostHighlightColor = new Color(1f, 1f, 1f, 0.22f);
 
     [Header("Preview CLEAR ala Block Blast")]
     public bool enableClearPreview = true;
@@ -81,7 +80,7 @@ public class BlastInput : MonoBehaviour
     Camera _cam;
 
     int _current = -1;                 // index potongan tray yang sedang dipilih
-    Material _matValid, _matInvalid, _matPreview;
+    Material _matGhost, _matPreview;
     Transform _ghostRoot, _previewRoot;
     readonly List<GameObject> _ghosts = new List<GameObject>();
     readonly List<GameObject> _previews = new List<GameObject>();
@@ -90,8 +89,6 @@ public class BlastInput : MonoBehaviour
     Transform _heldRoot;
     readonly List<GameObject> _held = new List<GameObject>();
     readonly Dictionary<int, Material> _solidMats = new Dictionary<int, Material>();
-    // material ghost per-warna (translusen, warna = warna balok).
-    readonly Dictionary<int, Material> _ghostMats = new Dictionary<int, Material>();
 
     // status drag-putar (klik-kanan)
     bool _rotating;
@@ -121,11 +118,8 @@ public class BlastInput : MonoBehaviour
     void Start()
     {
         _cam = Camera.main;
-        // Alpha ghost dipaksa = ghostAlpha (abaikan alpha pada validColor/invalidColor).
-        Color v = validColor; v.a = ghostAlpha;
-        Color iv = invalidColor; iv.a = ghostAlpha;
-        _matValid = MakeGhostMaterial(v, false);
-        _matInvalid = MakeGhostMaterial(iv, false);
+        // Indikator sel tujuan: highlight tipis (pakai emission -> glow lembut).
+        _matGhost = MakeGhostMaterial(ghostHighlightColor, true);
         _matPreview = MakeGhostMaterial(clearPreviewColor, true); // pakai emission -> menyala
         EnsureGhostRoot();
         EnsurePreviewRoot();
@@ -181,6 +175,12 @@ public class BlastInput : MonoBehaviour
 
         if (active && PointerToCell(out col, out row))
         {
+            // Pusatkan potongan tepat di bawah jari (gaya Block Blast) supaya
+            // indikator tujuan TIDAK geser ke kanan. Anchor = sel jari - centroid.
+            PieceCentroidOffset(piece, out int offX, out int offY);
+            col = core.Wrap(col - offX);
+            row = row - offY;
+
             haveCell = true;
             canPlace = core.CanPlace(piece, col, row);
             _lastCol = col; _lastRow = row; _lastCanPlace = canPlace; _hasLast = true;
@@ -190,8 +190,8 @@ public class BlastInput : MonoBehaviour
             _hasLast = false; // menekan tapi belum menyeret / di luar sel -> tak ada target
         }
 
-        // Ghost HANYA muncul saat posisi PAS (valid). Selain itu, cukup blok melayang.
-        SetGhost(haveCell && canPlace, piece, col, row, canPlace);
+        // Indikator sel tujuan (highlight halus) HANYA saat posisi PAS.
+        SetGhost(haveCell && canPlace, piece, col, row);
         // Poin 1: blok melayang (overlay layar) mengikuti jari selama menyeret dari tray.
         SetHeldPiece(enableHeldPiece && active, piece);
 
@@ -224,6 +224,17 @@ public class BlastInput : MonoBehaviour
             SetClearPreview(null);
             SetHeldPiece(false, null); // sembunyikan blok melayang setelah dilepas
         }
+    }
+
+    // Centroid (dibulatkan) offset sel potongan -> dipakai memusatkan di jari.
+    void PieceCentroidOffset(BlastCore.Piece piece, out int offX, out int offY)
+    {
+        float ax = 0f, ay = 0f;
+        int n = piece.Cells.Length;
+        foreach (var (dx, dy) in piece.Cells) { ax += dx; ay += dy; }
+        if (n > 0) { ax /= n; ay /= n; }
+        offX = Mathf.RoundToInt(ax);
+        offY = Mathf.RoundToInt(ay);
     }
 
     // ================= PREDIKSI CLEAR (untuk preview) =================
@@ -425,7 +436,7 @@ public class BlastInput : MonoBehaviour
         return true;
     }
 
-    // ================= GHOST PREVIEW =================
+    // ================= INDIKATOR SEL TUJUAN (highlight halus) =================
     void EnsureGhostRoot()
     {
         if (_ghostRoot != null) return;
@@ -435,7 +446,7 @@ public class BlastInput : MonoBehaviour
         _ghosts.Clear();
     }
 
-    void SetGhost(bool show, BlastCore.Piece piece, int col, int row, bool canPlace)
+    void SetGhost(bool show, BlastCore.Piece piece, int col, int row)
     {
         if (!show || piece == null)
         {
@@ -444,8 +455,6 @@ public class BlastInput : MonoBehaviour
             return;
         }
 
-        // Ghost diwarnai SAMA dengan warna balok (translusen) -> seperti bayangan balok itu.
-        var mat = GhostMat(piece.Color);
         EnsureGhosts(piece.Cells.Length);
 
         int used = 0;
@@ -459,10 +468,11 @@ public class BlastInput : MonoBehaviour
             g.SetActive(true);
             g.transform.localPosition = _game.CellToWorld(c, r);
             g.transform.localRotation = _game.CellRotation(c);
-            g.transform.localScale = new Vector3(_game.cellWidth * _game.gap,
-                                                 _game.cellHeight * _game.gap,
-                                                 _game.blockDepth);
-            g.GetComponent<MeshRenderer>().sharedMaterial = mat;
+            // highlight tipis "membungkus" sel tujuan (sedikit lebih besar dari blok).
+            g.transform.localScale = new Vector3(_game.cellWidth * _game.gap * 1.04f,
+                                                 _game.cellHeight * _game.gap * 1.04f,
+                                                 _game.blockDepth * 1.06f);
+            g.GetComponent<MeshRenderer>().sharedMaterial = _matGhost;
         }
         for (int i = used; i < _ghosts.Count; i++)
             if (_ghosts[i] != null) _ghosts[i].SetActive(false);
@@ -585,18 +595,6 @@ public class BlastInput : MonoBehaviour
         if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", c);
         m.color = c;
         _solidMats[color] = m;
-        return m;
-    }
-
-    // Material GHOST: translusen, warna = warna balok. Dipakai saat posisi PAS saja.
-    Material GhostMat(int color)
-    {
-        if (_ghostMats.TryGetValue(color, out var found) && found != null) return found;
-        Color c = (_game.palette != null && color >= 0 && color < _game.palette.Length)
-                  ? _game.palette[color] : Color.white;
-        c.a = ghostAlpha;
-        var m = MakeGhostMaterial(c, true); // sedikit emission -> menyala lembut
-        _ghostMats[color] = m;
         return m;
     }
 
