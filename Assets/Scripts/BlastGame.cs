@@ -3,8 +3,11 @@ using KubikaBlast;
 
 /// <summary>
 /// Render TABUNG 3D gaya gulungan kabel + kubus dari BlastCore.
-/// Tahap 2: statis (isi grid contoh, tampilkan). Belum ada input.
-/// Tempel ke GameObject kosong, tekan Play.
+/// Tahap 2: render statis. Tahap 3: menyediakan hook untuk BlastInput
+/// (Core, Radius, CellMesh, CellRotation, TryPlace) + dukungan PUTAR TABUNG.
+///
+/// Tempel ke GameObject kosong (mis. "Game"), lalu tambahkan juga komponen
+/// BlastInput di GameObject yang sama agar bisa dimainkan.
 /// </summary>
 public class BlastGame : MonoBehaviour
 {
@@ -30,6 +33,9 @@ public class BlastGame : MonoBehaviour
     public float camDistanceFactor = 3.2f;
     public float camHeightFactor = 0.8f;
 
+    [Header("Debug")]
+    public bool demoFill = false;           // isi grid contoh (dulu Tahap 2). Default OFF.
+
     public Color[] palette;
 
     float _radius;
@@ -37,6 +43,11 @@ public class BlastGame : MonoBehaviour
     Transform _blocksRoot;
     Mesh _mesh;
     Material[] _mats;
+
+    // ===== Hook publik untuk BlastInput (Tahap 3) =====
+    public BlastCore Core => _core;   // logika inti (grid, tray, skor)
+    public float Radius => _radius;   // radius cincin blok (dipakai raycast)
+    public Mesh CellMesh => _mesh;    // mesh kubus membulat (dipakai ghost)
 
     void Start()
     {
@@ -46,13 +57,12 @@ public class BlastGame : MonoBehaviour
     /// <summary>
     /// Bangun ulang seluruh tabung + isi.
     /// Bisa dipanggil MANUAL: klik kanan komponen "Blast Game" di Inspector
-    /// lalu pilih "Rebuild Tabung". Jadi kamu bisa ubah nilai di Inspector
-    /// dan langsung lihat hasilnya TANPA harus tekan Play.
+    /// lalu pilih "Rebuild Tabung" untuk lihat perubahan TANPA Play.
     /// </summary>
     [ContextMenu("Rebuild Tabung")]
     public void Rebuild()
     {
-        // hapus anak lama (Reel + Blocks) supaya tidak dobel
+        // hapus anak lama (Reel + Blocks + Ghost) supaya tidak dobel
         for (int i = transform.childCount - 1; i >= 0; i--)
         {
             var ch = transform.GetChild(i).gameObject;
@@ -69,11 +79,13 @@ public class BlastGame : MonoBehaviour
         BuildReel();
         SetupCamera();
 
-        DemoFill();     // isi contoh biar kelihatan (hapus nanti di Tahap 3)
+        if (demoFill) DemoFill();   // hanya untuk debug; default OFF di Tahap 3
         RenderGrid();
     }
 
-    // ===== Pemetaan sel -> dunia 3D (bagian 9.1 konsep) =====
+    // ===== Pemetaan sel -> ruang LOKAL tabung (bagian 9.1 konsep) =====
+    // NB: mengembalikan koordinat LOKAL (relatif ke transform BlastGame) supaya
+    // blok & ghost ikut berputar saat tabung diputar.
     public Vector3 CellToWorld(int c, int r)
     {
         float ang = (float)c / columns * Mathf.PI * 2f;
@@ -83,7 +95,7 @@ public class BlastGame : MonoBehaviour
         return new Vector3(x, y, z);
     }
 
-    Quaternion CellRotation(int c)
+    public Quaternion CellRotation(int c)
     {
         float ang = (float)c / columns * Mathf.PI * 2f;
         Vector3 outward = new Vector3(Mathf.Cos(ang), 0f, Mathf.Sin(ang));
@@ -97,23 +109,22 @@ public class BlastGame : MonoBehaviour
         var reel = new GameObject("Reel").transform;
         reel.SetParent(transform, false);
 
-        // Drum (spool dalam) — dibuat lebih KECIL dari cincin blok, supaya blok
-        // tidak menempel di drum melainkan duduk di TEPI tutup (flange).
+        // Drum (spool dalam) - lebih KECIL dari cincin blok, supaya blok duduk
+        // di TEPI tutup (flange), bukan menempel drum.
         float drumR = _radius * drumRadiusFactor;
         var drum = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
         drum.name = "Drum";
         drum.transform.SetParent(reel, false);
         drum.transform.localScale = new Vector3(drumR * 2f, totalH / 2f, drumR * 2f);
-        drum.transform.position = new Vector3(0, totalH / 2f, 0);
+        drum.transform.localPosition = new Vector3(0, totalH / 2f, 0);
         Paint(drum, new Color(0.25f, 0.27f, 0.32f));
 
-        // Flange atas & bawah (piringan) — radius sedikit di luar cincin blok,
-        // jadi blok tampak berada di TEPI tutup.
+        // Flange atas & bawah (piringan)
         float flangeR = _radius + flangeMargin;
-        CreateDisc("FlangeBawah", reel, 0f, flangeR, totalH);
-        CreateDisc("FlangeAtas", reel, totalH, flangeR, totalH);
+        CreateDisc("FlangeBawah", reel, 0f, flangeR);
+        CreateDisc("FlangeAtas", reel, totalH, flangeR);
 
-        // Poros/as opsional (menghubungkan kedua flange lewat tengah)
+        // Poros/as opsional
         if (showAxle)
         {
             var axle = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
@@ -121,7 +132,7 @@ public class BlastGame : MonoBehaviour
             axle.transform.SetParent(reel, false);
             float axleH = totalH + flangeThickness * 4f;
             axle.transform.localScale = new Vector3(drumR * 0.5f, axleH / 2f, drumR * 0.5f);
-            axle.transform.position = new Vector3(0, totalH / 2f, 0);
+            axle.transform.localPosition = new Vector3(0, totalH / 2f, 0);
             Paint(axle, new Color(0.18f, 0.19f, 0.22f));
         }
 
@@ -130,13 +141,13 @@ public class BlastGame : MonoBehaviour
         _blocksRoot = root;
     }
 
-    void CreateDisc(string name, Transform parent, float y, float discRadius, float totalH)
+    void CreateDisc(string name, Transform parent, float y, float discRadius)
     {
         var disc = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
         disc.name = name;
         disc.transform.SetParent(parent, false);
         disc.transform.localScale = new Vector3(discRadius * 2f, flangeThickness / 2f, discRadius * 2f);
-        disc.transform.position = new Vector3(0, y, 0);
+        disc.transform.localPosition = new Vector3(0, y, 0);
         Paint(disc, new Color(0.30f, 0.22f, 0.15f)); // warna kayu
     }
 
@@ -144,7 +155,11 @@ public class BlastGame : MonoBehaviour
     public void RenderGrid()
     {
         for (int i = _blocksRoot.childCount - 1; i >= 0; i--)
-            Destroy(_blocksRoot.GetChild(i).gameObject);
+        {
+            var ch = _blocksRoot.GetChild(i).gameObject;
+            if (Application.isPlaying) Destroy(ch);
+            else DestroyImmediate(ch);
+        }
 
         for (int r = 0; r < height; r++)
             for (int c = 0; c < columns; c++)
@@ -155,12 +170,22 @@ public class BlastGame : MonoBehaviour
             }
     }
 
+    /// <summary>Dipanggil BlastInput: taruh potongan tray lalu render ulang.</summary>
+    public bool TryPlace(int trayIndex, int col, int row)
+    {
+        if (_core == null) return false;
+        bool ok = _core.PlacePiece(trayIndex, col, row);
+        if (ok) RenderGrid();
+        return ok;
+    }
+
     void SpawnBlock(int c, int r, int color)
     {
         var go = new GameObject($"Block_{c}_{r}");
         go.transform.SetParent(_blocksRoot, false);
-        go.transform.position = CellToWorld(c, r);
-        go.transform.rotation = CellRotation(c);
+        // LOKAL supaya ikut berputar bersama tabung
+        go.transform.localPosition = CellToWorld(c, r);
+        go.transform.localRotation = CellRotation(c);
         go.transform.localScale = new Vector3(cellWidth * gap, cellHeight * gap, blockDepth);
 
         var mf = go.AddComponent<MeshFilter>();
@@ -172,7 +197,7 @@ public class BlastGame : MonoBehaviour
     // ===== Kamera membidik titik tengah tabung (bagian 9.2) =====
     void SetupCamera()
     {
-        if (!autoCamera) return; // biarkan posisi/rotasi kamera manual apa adanya
+        if (!autoCamera) return; // biarkan kamera manual apa adanya
         var cam = Camera.main;
         if (cam == null) return;
         float centerY = height * cellHeight / 2f;
@@ -216,18 +241,20 @@ public class BlastGame : MonoBehaviour
         if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", col);
         m.color = col;
         go.GetComponent<MeshRenderer>().sharedMaterial = m;
-        // buang collider default cylinder (belum perlu di Tahap 2)
+        // buang collider default cylinder (raycast tabung dihitung matematis, tak perlu collider)
         var cc = go.GetComponent<Collider>();
-        if (cc != null) Destroy(cc);
+        if (cc != null)
+        {
+            if (Application.isPlaying) Destroy(cc);
+            else DestroyImmediate(cc);
+        }
     }
 
-    // ===== Isi contoh untuk lihat hasil (hapus di Tahap 3) =====
+    // ===== Isi contoh untuk debug (dulu Tahap 2). Aktifkan lewat toggle demoFill. =====
     void DemoFill()
     {
-        // baris paling bawah penuh 1 cincin
         for (int c = 0; c < columns; c++) _core.Grid[c, 0] = c % numColors;
-        // beberapa kubus acak-teratur di atasnya
         for (int c = 0; c < columns; c += 2) _core.Grid[c, 1] = (c + 1) % numColors;
-        for (int r = 0; r < 4; r++) _core.Grid[3, r] = 2; // satu kolom naik
+        for (int r = 0; r < 4; r++) _core.Grid[3, r] = 2;
     }
 }
