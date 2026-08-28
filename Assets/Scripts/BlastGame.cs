@@ -51,6 +51,18 @@ public class BlastGame : MonoBehaviour
     [Header("Debug")]
     public bool demoFill = false;           // isi grid contoh (dulu Tahap 2). Default OFF.
 
+    [Header("Blok default saat mulai (starting fill)")]
+    // Isi sebagian tabung dengan blok bawaan SETIAP kali mulai / Restart.
+    public bool startWithBlocks = true;
+    // Jumlah baris dari BAWAH yang diisi blok bawaan.
+    public int startRows = 3;
+    // Kepadatan isian (0..1). 0.45 = kira-kira 45% sel terisi.
+    [Range(0f, 1f)] public float startFillChance = 0.45f;
+    // true = warna acak; false = warna mengikuti kolom (pola pelangi rapi).
+    public bool startRandomColors = true;
+    // 0 = acak tiap mulai. Selain 0 = pola TETAP (reproducible) tiap Restart.
+    public int startSeed = 0;
+
     public Color[] palette;
 
     float _radius;
@@ -98,7 +110,8 @@ public class BlastGame : MonoBehaviour
         // Kamera diatur SEKALI saja (frame pertama), supaya tak reset tiap Rebuild.
         if (autoCamera && !_cameraFramed) { SetupCamera(); _cameraFramed = true; }
 
-        if (demoFill) DemoFill();   // hanya untuk debug; default OFF di Tahap 3
+        if (demoFill) DemoFill();                  // hanya untuk debug; default OFF di Tahap 3
+        else if (startWithBlocks) StartingFill();  // blok bawaan tiap mulai / Restart
         RenderGrid();
     }
 
@@ -427,5 +440,45 @@ public class BlastGame : MonoBehaviour
         for (int c = 0; c < columns; c++) _core.Grid[c, 0] = c % numColors;
         for (int c = 0; c < columns; c += 2) _core.Grid[c, 1] = (c + 1) % numColors;
         for (int r = 0; r < 4; r++) _core.Grid[3, r] = 2;
+    }
+
+    // ===== Blok DEFAULT saat mulai / Restart (starting fill) =====
+    // Mengisi sebagian baris paling BAWAH tabung dengan blok berwarna supaya papan
+    // tidak kosong saat game dimulai. Dirancang agar TIDAK memicu clear otomatis:
+    // tiap cincin (baris) dijamin menyisakan minimal satu sel kosong, dan tiap
+    // kolom juga dijaga tidak penuh.
+    void StartingFill()
+    {
+        int rows = Mathf.Clamp(startRows, 0, height);
+        if (rows <= 0 || numColors <= 0) return;
+
+        var rng = startSeed != 0 ? new System.Random(startSeed) : new System.Random();
+        float chance = Mathf.Clamp01(startFillChance);
+
+        for (int r = 0; r < rows; r++)
+        {
+            // Satu sel dipaksa KOSONG per cincin -> cincin tak pernah langsung penuh.
+            int forcedEmpty = rng.Next(columns);
+            for (int c = 0; c < columns; c++)
+            {
+                if (c == forcedEmpty) { _core.Grid[c, r] = -1; continue; }
+                if (rng.NextDouble() <= chance)
+                {
+                    int color = startRandomColors ? rng.Next(numColors) : c % numColors;
+                    _core.Grid[c, r] = color;
+                }
+                else _core.Grid[c, r] = -1;
+            }
+        }
+
+        // Jaga-jaga: kalau ada kolom yang kebetulan penuh (mis. startRows = height),
+        // kosongkan satu selnya supaya tak langsung ter-clear saat mulai.
+        for (int c = 0; c < columns; c++)
+        {
+            bool full = true;
+            for (int r = 0; r < height; r++)
+                if (_core.Grid[c, r] == -1) { full = false; break; }
+            if (full) _core.Grid[c, rng.Next(height)] = -1;
+        }
     }
 }
