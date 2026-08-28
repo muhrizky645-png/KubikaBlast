@@ -163,4 +163,188 @@ public class BlastUI : MonoBehaviour
 
         bool go = core.GameOver;
         if (_gameOverPanel.activeSelf != go) _gameOverPanel.SetActive(go);
-        if (go) _gameOverFinal.text = "Skor Akhir
+        if (go) _gameOverFinal.text = "Skor Akhir\n" + core.Score;
+
+        HandleTaps(core);
+    }
+
+    void RefreshTray(BlastCore core)
+    {
+        int sel = input != null ? input.CurrentIndex : -1;
+        var pal = game.palette;
+        for (int i = 0; i < 3; i++)
+        {
+            var pc = core.Tray[i];
+            bool used = pc == null || pc.Used;
+
+            _slotBg[i].color = used ? slotUsed : (i == sel ? slotSelected : slotColor);
+
+            if (!ReferenceEquals(_lastPiece[i], pc) || _lastUsed[i] != used)
+            {
+                _lastPiece[i] = pc;
+                _lastUsed[i] = used;
+                RedrawSlotCells(i, pc, used, pal);
+            }
+        }
+    }
+
+    void RedrawSlotCells(int i, BlastCore.Piece pc, bool used, Color[] pal)
+    {
+        var list = _cellImgs[i];
+        foreach (var g in list) if (g != null) Destroy(g);
+        list.Clear();
+        if (pc == null || used || pc.Cells == null || pc.Cells.Length == 0) return;
+
+        int minX = int.MaxValue, maxX = int.MinValue, minY = int.MaxValue, maxY = int.MinValue;
+        foreach (var (dx, dy) in pc.Cells)
+        {
+            if (dx < minX) minX = dx; if (dx > maxX) maxX = dx;
+            if (dy < minY) minY = dy; if (dy > maxY) maxY = dy;
+        }
+        int w = maxX - minX + 1, h = maxY - minY + 1;
+        Vector2 area = _cellHolder[i].sizeDelta;
+        float cell = Mathf.Min(area.x / Mathf.Max(1, w), area.y / Mathf.Max(1, h)) * 0.9f;
+        float cx = (minX + maxX) * 0.5f, cy = (minY + maxY) * 0.5f;
+        Color col = (pal != null && pc.Color >= 0 && pc.Color < pal.Length) ? pal[pc.Color] : Color.white;
+        col.a = 1f;
+
+        foreach (var (dx, dy) in pc.Cells)
+        {
+            var img = MakeImage("c", _cellHolder[i], col);
+            Place(img.rectTransform, new Vector2(0.5f, 0.5f),
+                  new Vector2((dx - cx) * cell, (dy - cy) * cell),
+                  new Vector2(cell * 0.92f, cell * 0.92f));
+            list.Add(img.gameObject);
+        }
+    }
+
+    // ==================================================================
+    // ============ INTERAKSI (tap) =====================================
+    // ==================================================================
+    void HandleTaps(BlastCore core)
+    {
+        if (!PointerPressedThisFrame()) return;
+        Vector2 p = PointerPos();
+
+        if (core.GameOver)
+        {
+            if (Contains(_restartRect, p)) DoRestart();
+            return;
+        }
+
+        for (int i = 0; i < 3; i++)
+        {
+            var pc = core.Tray[i];
+            if (pc != null && !pc.Used && Contains(_slot[i], p))
+            {
+                if (input != null) input.SelectTray(i);
+                return;
+            }
+        }
+    }
+
+    bool Contains(RectTransform rt, Vector2 screenPos)
+        => rt != null && RectTransformUtility.RectangleContainsScreenPoint(rt, screenPos, null);
+
+    void DoRestart()
+    {
+        if (game == null) return;
+        game.Rebuild();
+        if (input != null) input.ResetSelection();
+        for (int i = 0; i < 3; i++) { _lastPiece[i] = null; _lastUsed[i] = true; } // paksa gambar ulang tray
+    }
+
+    // Dipakai BlastInput supaya balok tidak jatuh saat menekan area UI.
+    public bool IsOverInteractiveUI(Vector2 screenPos)
+    {
+        if (game == null) return false;
+        var core = game.Core;
+        if (core == null) return false;
+        if (core.GameOver) return Contains(_restartRect, screenPos);
+        for (int i = 0; i < 3; i++)
+        {
+            var pc = core.Tray[i];
+            if (pc != null && !pc.Used && Contains(_slot[i], screenPos)) return true;
+        }
+        return false;
+    }
+
+    public static bool PointerBlocksPlacement(Vector2 screenPos)
+        => Instance != null && Instance.IsOverInteractiveUI(screenPos);
+
+    // ==================================================================
+    // ============ HELPER UI ===========================================
+    // ==================================================================
+    Text MakeText(string name, Transform parent, int size, TextAnchor anchor, FontStyle style = FontStyle.Normal)
+    {
+        var goT = new GameObject(name, typeof(RectTransform));
+        goT.transform.SetParent(parent, false);
+        var t = goT.AddComponent<Text>();
+        t.font = UIFont();
+        t.fontSize = size;
+        t.alignment = anchor;
+        t.fontStyle = style;
+        t.color = Color.white;
+        t.raycastTarget = false;
+        t.horizontalOverflow = HorizontalWrapMode.Overflow;
+        t.verticalOverflow = VerticalWrapMode.Overflow;
+        return t;
+    }
+
+    Image MakeImage(string name, Transform parent, Color col)
+    {
+        var goI = new GameObject(name, typeof(RectTransform));
+        goI.transform.SetParent(parent, false);
+        var img = goI.AddComponent<Image>();
+        img.color = col;
+        img.raycastTarget = false; // hit-test manual, tak butuh raycaster
+        return img;
+    }
+
+    void Place(RectTransform rt, Vector2 anchor, Vector2 pos, Vector2 size)
+    {
+        rt.anchorMin = anchor;
+        rt.anchorMax = anchor;
+        rt.pivot = anchor;
+        rt.anchoredPosition = pos;
+        rt.sizeDelta = size;
+    }
+
+    Font UIFont()
+    {
+        if (_font != null) return _font;
+        _font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        if (_font == null) _font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+        if (_font == null) _font = Font.CreateDynamicFontFromOSFont("Arial", 16);
+        return _font;
+    }
+
+    // ==================================================================
+    // ============ ABSTRAKSI INPUT (lama vs baru) ======================
+    // ==================================================================
+    Vector2 PointerPos()
+    {
+#if USE_NEW_INPUT
+        var m = Mouse.current;
+        if (m != null) return m.position.ReadValue();
+        var ts = Touchscreen.current;
+        if (ts != null && ts.primaryTouch != null) return ts.primaryTouch.position.ReadValue();
+        return Vector2.zero;
+#else
+        return Input.mousePosition;
+#endif
+    }
+
+    bool PointerPressedThisFrame()
+    {
+#if USE_NEW_INPUT
+        var m = Mouse.current;
+        if (m != null && m.leftButton.wasPressedThisFrame) return true;
+        var ts = Touchscreen.current;
+        if (ts != null && ts.primaryTouch != null && ts.primaryTouch.press.wasPressedThisFrame) return true;
+        return false;
+#else
+        return Input.GetMouseButtonDown(0);
+#endif
+    }
+}
