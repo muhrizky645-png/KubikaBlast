@@ -24,11 +24,11 @@ using KubikaBlast;
 /// MODEL MURNI SERET-DARI-TRAY (HP) ala Block Blast:
 ///  1. TEKAN jari TEPAT di potongan tray yang diinginkan (BUKAN di tabung).
 ///  2. Tanpa melepas, SERET jari ke tabung. Selama menyeret, potongan tampak
-///     "MELAYANG" sebagai OVERLAY di permukaan layar (mengikuti jari, rata,
-///     menghadap kamera), seukuran blok asli. Di tabung TIDAK ada balok
-///     berwarna kembar; yang muncul cuma INDIKATOR SEL TUJUAN yang halus
-///     (highlight tipis) dan HANYA saat posisi PAS. Indikator ini dipusatkan
-///     tepat di bawah jari (tidak geser).
+///     "MELAYANG". Saat sudah menemukan sel tujuan valid, blok melayang digambar
+///     MELENGKUNG di permukaan tabung (sinkron dgn bayangan) & terangkat sedikit.
+///     Saat belum ada sel tujuan valid, blok jadi OVERLAY rata mengikuti jari.
+///     Di tabung TIDAK ada balok berwarna kembar; yang muncul cuma INDIKATOR SEL
+///     TUJUAN yang halus (highlight tipis) dan HANYA saat posisi PAS.
 ///  3. Kalau posisi seret membuat cincin/kolom PENUH -> sel yang akan hancur
 ///     ikut MENYALA (preview clear ala Block Blast).
 ///  4. LEPAS jari di sel valid -> potongan ditaruh. Lepas di luar tabung = batal.
@@ -61,25 +61,26 @@ public class BlastInput : MonoBehaviour
     // Warna nyala untuk sel yang AKAN hancur (baris/kolom penuh).
     public Color clearPreviewColor = new Color(1f, 0.95f, 0.35f, 0.55f);
 
-    [Header("Blok melayang saat diseret (poin 1) - OVERLAY LAYAR")]
-    // Blok melayang digambar seperti menempel di PERMUKAAN LAYAR (overlay),
-    // bukan objek 3D yang berdiri di dunia. Selalu menghadap kamera & rata.
+    [Header("Blok melayang saat diseret (poin 1)")]
+    // Blok melayang: MELENGKUNG di tabung saat terkunci ke ghost, atau OVERLAY layar
+    // rata (fallback) saat belum ada sel tujuan valid.
     public bool enableHeldPiece = true;
     // Offset ke ATAS (pixel) supaya blok melayang di atas jari, tak ketutup jari.
-    // Dipakai HANYA saat FALLBACK (jari belum di sel valid). Saat terkunci ke
-    // ghost, posisi blok mengikuti sel tujuan (lihat heldGhostLiftCells).
+    // Dipakai HANYA saat FALLBACK overlay (jari belum di sel valid).
     public float heldScreenYOffset = 90f;
     // Samakan ukuran blok melayang dengan blok ASLI di tabung (seperti "bayangan" blok).
+    // Dipakai HANYA pada mode fallback overlay.
     public bool matchBlockSize = true;
-    // Pengali halus ukuran blok melayang (1 = pas sama blok asli).
+    // Pengali halus ukuran blok melayang (1 = pas sama blok asli). Mode fallback overlay.
     public float heldSizeMultiplier = 1f;
     // Ukuran satu sel blok melayang di LAYAR (pixel). Dipakai HANYA bila matchBlockSize = false.
     public float heldPixelSize = 90f;
-    // Jarak overlay dari kamera (unit dunia). Kecil = terasa menempel di layar.
+    // Jarak overlay dari kamera (unit dunia). Kecil = terasa menempel di layar. Mode fallback.
     public float heldDepth = 2f;
     // OPSI #3: kunci blok melayang ke posisi ghost (sel tujuan). Nilai = seberapa
-    // tinggi (dalam satuan SEL) blok terangkat di atas sel tujuan agar tak ketutup
-    // jari. 0 = pas menutup ghost. Ikut skala kamera otomatis (relatif ukuran sel).
+    // tinggi (dalam satuan SEL) blok terangkat di atas sel tujuan agar tak ketutup jari.
+    // Saat terkunci ke ghost, blok kini digambar MELENGKUNG di permukaan tabung
+    // (sinkron dgn bayangan) & diangkat RADIAL keluar sejauh nilai ini. 0 = pas di ghost.
     public float heldGhostLiftCells = 0.6f;
 
     BlastGame _game;
@@ -198,7 +199,7 @@ public class BlastInput : MonoBehaviour
 
         // Indikator sel tujuan (highlight halus) HANYA saat posisi PAS.
         SetGhost(haveCell && canPlace, piece, col, row);
-        // Poin 1: blok melayang (overlay layar) mengikuti jari selama menyeret dari tray.
+        // Poin 1: blok melayang mengikuti jari selama menyeret dari tray.
         SetHeldPiece(enableHeldPiece && active, piece);
 
         // ---- preview CLEAR: sel yang akan hancur menyala ----
@@ -498,7 +499,7 @@ public class BlastInput : MonoBehaviour
         }
     }
 
-    // ================= BLOK MELAYANG = OVERLAY LAYAR (poin 1) =================
+    // ================= BLOK MELAYANG (poin 1) =================
     void EnsureHeldRoot()
     {
         if (_heldRoot != null) return;
@@ -508,15 +509,13 @@ public class BlastInput : MonoBehaviour
         _held.Clear();
     }
 
-    // Gambar potongan seperti OVERLAY yang menempel di permukaan layar:
-    // - Tata letak sel dihitung dalam PIXEL layar (relatif titik ACUAN).
-    // - Ukuran disamakan dengan blok ASLI di tabung (matchBlockSize) -> "bayangan" blok.
-    // - Diproyeksikan dekat kamera (heldDepth) & selalu menghadap kamera -> tampak rata.
-    //
-    // OPSI #3 (kunci ke ghost): titik ACUAN = pusat sel tujuan (di tabung) yang
-    // diproyeksikan ke layar, lalu diangkat sedikit (heldGhostLiftCells). Jadi blok
-    // melayang selalu "duduk" tepat di atas ghost, apa pun angle/zoom kamera.
-    // Kalau belum ada sel tujuan yang valid, blok jatuh-balik mengikuti jari.
+    // Blok melayang punya DUA mode:
+    //  (A) MELENGKUNG di tabung (saat terkunci ke ghost) -> tiap kubus dipetakan ke
+    //      permukaan silinder pakai CellToWorld + CellRotation (persis seperti ghost),
+    //      lalu diangkat RADIAL keluar sejauh heldGhostLiftCells. Hasilnya lengkungnya
+    //      SINKRON dengan bayangan, apa pun angle/zoom kamera.
+    //  (B) OVERLAY LAYAR rata (fallback saat belum ada sel tujuan valid) -> mengikuti
+    //      jari, menghadap kamera, seukuran blok asli.
     void SetHeldPiece(bool show, BlastCore.Piece piece)
     {
         EnsureHeldRoot();
@@ -527,7 +526,50 @@ public class BlastInput : MonoBehaviour
             return;
         }
 
-        // Pusatkan potongan pada titik acuan (rata-rata offset sel).
+        EnsureHeld(piece.Cells.Length);
+
+        bool lockedToGhost = _hasLast && _lastCanPlace;
+        if (lockedToGhost) RenderHeldCurved(piece);   // (A) melengkung di tabung
+        else RenderHeldFlatOverlay(piece);            // (B) overlay layar mengikuti jari
+    }
+
+    // (A) Blok melayang MELENGKUNG: dipetakan ke permukaan tabung seperti ghost,
+    // lalu diangkat radial keluar biar "melayang" di atas bayangan & tak ketutup jari.
+    void RenderHeldCurved(BlastCore.Piece piece)
+    {
+        float lift = _game.cellHeight * Mathf.Max(0f, heldGhostLiftCells);
+
+        int used = 0;
+        foreach (var (dx, dy) in piece.Cells)
+        {
+            int r = _lastRow + dy;
+            if (r < 0 || r >= _game.height) continue;
+            int c = _game.Core.Wrap(_lastCol + dx);
+
+            Vector3 localPos = _game.CellToWorld(c, r);
+            Quaternion localRot = _game.CellRotation(c);
+            Vector3 outward = localRot * Vector3.forward; // arah radial keluar (ruang lokal tabung)
+            localPos += outward * lift;                   // angkat menjauh dari permukaan
+
+            var g = _held[used++];
+            g.SetActive(true);
+            // pakai transform tabung -> ikut posisi & rotasi tabung (sinkron dgn ghost).
+            g.transform.position = _game.transform.TransformPoint(localPos);
+            g.transform.rotation = _game.transform.rotation * localRot;
+            g.transform.localScale = new Vector3(_game.cellWidth * _game.gap,
+                                                 _game.cellHeight * _game.gap,
+                                                 _game.blockDepth);
+            g.GetComponent<MeshRenderer>().sharedMaterial = SolidMat(piece.Color);
+        }
+        for (int i = used; i < _held.Count; i++)
+            if (_held[i] != null) _held[i].SetActive(false);
+    }
+
+    // (B) Fallback OVERLAY LAYAR rata: dipakai saat belum ada sel tujuan valid.
+    // Tata letak sel dihitung dalam PIXEL layar (relatif titik acuan = jari + offset),
+    // diproyeksikan dekat kamera (heldDepth) & selalu menghadap kamera -> tampak rata.
+    void RenderHeldFlatOverlay(BlastCore.Piece piece)
+    {
         int len = piece.Cells.Length;
         float avgX = 0f, avgY = 0f;
         foreach (var (dx, dy) in piece.Cells) { avgX += dx; avgY += dy; }
@@ -551,44 +593,14 @@ public class BlastInput : MonoBehaviour
         }
         effPx *= Mathf.Max(0.05f, heldSizeMultiplier);
 
-        // ===== OPSI #3: KUNCI titik ACUAN ke posisi ghost =====
-        // Kalau ada sel tujuan VALID, acuan = pusat sel-sel tujuan (diproyeksikan ke
-        // layar) + angkat sedikit. Kalau belum ada, fallback ikut jari + offset.
-        Vector2 anchor;
-        bool lockedToGhost = _hasLast && _lastCanPlace;
-        if (lockedToGhost)
-        {
-            Vector3 sum = Vector3.zero; int cnt = 0;
-            foreach (var (dx, dy) in piece.Cells)
-            {
-                int r = _lastRow + dy;
-                if (r < 0 || r >= _game.height) continue;
-                int c = _game.Core.Wrap(_lastCol + dx);
-                sum += _game.transform.TransformPoint(_game.CellToWorld(c, r));
-                cnt++;
-            }
-            if (cnt > 0)
-            {
-                Vector3 sp3 = _cam.WorldToScreenPoint(sum / cnt);
-                anchor = new Vector2(sp3.x, sp3.y);
-                anchor.y += effPx * heldGhostLiftCells; // terangkat sedikit di atas ghost
-            }
-            else
-            {
-                anchor = PointerPosition(); anchor.y += heldScreenYOffset;
-            }
-        }
-        else
-        {
-            anchor = PointerPosition(); anchor.y += heldScreenYOffset;
-        }
+        Vector2 anchor = PointerPosition();
+        anchor.y += heldScreenYOffset;
 
         float worldPerPixel = (2f * d * tanV) * invH;
         float cube = effPx * worldPerPixel; // sisi kubus di dunia (~effPx px di layar)
 
         Quaternion rot = _cam.transform.rotation; // menghadap kamera -> tampak rata di layar
 
-        EnsureHeld(len);
         int used = 0;
         foreach (var (dx, dy) in piece.Cells)
         {
