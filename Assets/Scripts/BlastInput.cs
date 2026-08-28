@@ -17,6 +17,11 @@ using KubikaBlast;
 /// TAHAP 3 — Input & drag-drop untuk Kubika Blast.
 /// Tempel komponen ini ke GameObject "Game" yang SAMA dengan BlastGame.
 ///
+/// PENTING: DefaultExecutionOrder dibuat > 0 supaya BlastGame.Start() (yang
+/// memanggil Rebuild dan menghapus semua anak Game) jalan LEBIH DULU daripada
+/// BlastInput.Start(). Selain itu ghost root juga dibuat ulang otomatis kalau
+/// hilang (mis. setelah Rebuild), lihat EnsureGhostRoot().
+///
 /// Kontrol:
 ///  - Arahkan pointer (mouse / sentuh) ke permukaan tabung -> muncul ghost preview
 ///    (hijau = boleh ditaruh, merah = tidak boleh).
@@ -24,11 +29,9 @@ using KubikaBlast;
 ///  - Tombol 1 / 2 / 3 -> pilih potongan tray ke-1/2/3. TAB -> ganti ke potongan berikutnya.
 ///  - Putar TABUNG: drag pakai KLIK-KANAN, atau tombol Q/E, atau panah Kiri/Kanan,
 ///    atau DUA JARI di layar sentuh. (Potongan sendiri TIDAK diputar - khas Block Blast.)
-///
-/// Catatan: tray visual & panel skor menyusul di Tahap 4 (UI). Untuk sekarang skor,
-/// potongan terpilih, dan game over ditampilkan lewat Console (Debug.Log).
 /// </summary>
 [RequireComponent(typeof(BlastGame))]
+[DefaultExecutionOrder(1000)]
 public class BlastInput : MonoBehaviour
 {
     [Header("Kecepatan putar tabung")]
@@ -61,11 +64,7 @@ public class BlastInput : MonoBehaviour
         _cam = Camera.main;
         _matValid = MakeGhostMaterial(validColor);
         _matInvalid = MakeGhostMaterial(invalidColor);
-
-        var gr = new GameObject("Ghost").transform;
-        gr.SetParent(_game.transform, false);
-        _ghostRoot = gr;
-
+        EnsureGhostRoot();
         SelectFirstUnused();
     }
 
@@ -74,6 +73,8 @@ public class BlastInput : MonoBehaviour
         if (_cam == null) _cam = Camera.main;
         var core = _game.Core;
         if (core == null) return;
+
+        EnsureGhostRoot(); // buat ulang bila hilang (mis. setelah Rebuild tabung)
 
         HandleRotation();
         HandleSelection();
@@ -220,11 +221,24 @@ public class BlastInput : MonoBehaviour
     }
 
     // ================= GHOST PREVIEW =================
+    // Pastikan ghost root ADA dan menjadi anak Game (ikut posisi + rotasi tabung).
+    // Unity meng-overload operator== sehingga objek yang sudah di-Destroy terbaca
+    // sebagai null -> aman dipakai untuk mendeteksi ghost yang terhapus Rebuild.
+    void EnsureGhostRoot()
+    {
+        if (_ghostRoot != null) return;
+        var gr = new GameObject("Ghost").transform;
+        gr.SetParent(_game.transform, false); // anak Game -> ikut transform tabung
+        _ghostRoot = gr;
+        _ghosts.Clear(); // ghost cube lama sudah ikut terhapus bersama root lama
+    }
+
     void SetGhost(bool show, BlastCore.Piece piece, int col, int row, bool canPlace)
     {
         if (!show || piece == null)
         {
-            for (int i = 0; i < _ghosts.Count; i++) _ghosts[i].SetActive(false);
+            for (int i = 0; i < _ghosts.Count; i++)
+                if (_ghosts[i] != null) _ghosts[i].SetActive(false);
             return;
         }
 
@@ -240,6 +254,8 @@ public class BlastInput : MonoBehaviour
 
             var g = _ghosts[used++];
             g.SetActive(true);
+            // localPosition RELATIF ke ghost root (anak Game) = ruang lokal tabung,
+            // sama persis dengan blok terpasang -> posisi selalu sinkron.
             g.transform.localPosition = _game.CellToWorld(c, r);
             g.transform.localRotation = _game.CellRotation(c);
             g.transform.localScale = new Vector3(_game.cellWidth * _game.gap,
@@ -247,7 +263,8 @@ public class BlastInput : MonoBehaviour
                                                  _game.blockDepth);
             g.GetComponent<MeshRenderer>().sharedMaterial = mat;
         }
-        for (int i = used; i < _ghosts.Count; i++) _ghosts[i].SetActive(false);
+        for (int i = used; i < _ghosts.Count; i++)
+            if (_ghosts[i] != null) _ghosts[i].SetActive(false);
     }
 
     void EnsureGhosts(int n)
