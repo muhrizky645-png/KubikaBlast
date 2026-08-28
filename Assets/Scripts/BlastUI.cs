@@ -1,5 +1,4 @@
-// TAHAP 4 — Antarmuka (UI) untuk Kubika Blast.
-// Mendukung dua backend input (lama & baru) sama seperti BlastInput.
+// Antarmuka (UI) untuk Kubika Blast.
 #if ENABLE_INPUT_SYSTEM && !ENABLE_LEGACY_INPUT_MANAGER
 #define USE_NEW_INPUT
 #endif
@@ -13,15 +12,9 @@ using UnityEngine.InputSystem;
 using KubikaBlast;
 
 /// <summary>
-/// Membangun UI game SEPENUHNYA lewat kode (tanpa perlu menyusun Canvas manual):
-///  - Panel skor, combo, dan jumlah baris hancur (atas layar).
-///  - Tampilan TRAY 3 potongan (bentuknya digambar dari Piece.Cells). Tap slot
-///    untuk memilih potongan aktif.
-///  - Layar GAME OVER + tombol \"MAIN LAGI\" (memanggil BlastGame.Rebuild()).
-///
-/// Cara pakai: buat GameObject kosong (mis. \"UI\") lalu tambahkan komponen ini.
-/// Referensi BlastGame & BlastInput dicari otomatis. Interaksi (tap) ditangani
-/// manual pakai abstraksi input, jadi TIDAK butuh EventSystem.
+/// Membangun UI game SEPENUHNYA lewat kode. Skor/combo/baris/LEVEL, tray 3D, layar
+/// GAME OVER. Teks memakai outline + shadow + ukuran besar biar enak dilihat, dan
+/// potongan tray digambar bergaya 3D (bevel/gloss/shadow).
 /// </summary>
 public class BlastUI : MonoBehaviour
 {
@@ -37,7 +30,7 @@ public class BlastUI : MonoBehaviour
     public Color slotUsed = new Color(1f, 1f, 1f, 0.03f);
 
     Canvas _canvas;
-    Text _scoreText, _comboText, _linesText;
+    Text _scoreText, _comboText, _linesText, _levelText;
     readonly RectTransform[] _slot = new RectTransform[3];
     readonly Image[] _slotBg = new Image[3];
     readonly RectTransform[] _cellHolder = new RectTransform[3];
@@ -50,6 +43,7 @@ public class BlastUI : MonoBehaviour
     RectTransform _restartRect;
 
     Font _font;
+    Sprite _roundSprite;
 
     void Awake()
     {
@@ -82,16 +76,20 @@ public class BlastUI : MonoBehaviour
         Transform root = canvasGO.transform;
 
         // ---- teks status (atas) ----
-        _scoreText = MakeText("Score", root, 64, TextAnchor.UpperCenter, FontStyle.Bold);
-        Place(_scoreText.rectTransform, new Vector2(0.5f, 1f), new Vector2(0, -40), new Vector2(1000, 90));
+        _scoreText = MakeText("Score", root, 88, TextAnchor.UpperCenter, FontStyle.Bold);
+        Place(_scoreText.rectTransform, new Vector2(0.5f, 1f), new Vector2(0, -40), new Vector2(1000, 120));
 
-        _comboText = MakeText("Combo", root, 46, TextAnchor.UpperCenter, FontStyle.Bold);
+        _comboText = MakeText("Combo", root, 60, TextAnchor.UpperCenter, FontStyle.Bold);
         _comboText.color = new Color(1f, 0.85f, 0.25f);
-        Place(_comboText.rectTransform, new Vector2(0.5f, 1f), new Vector2(0, -135), new Vector2(1000, 70));
+        Place(_comboText.rectTransform, new Vector2(0.5f, 1f), new Vector2(0, -168), new Vector2(1000, 80));
 
-        _linesText = MakeText("Lines", root, 34, TextAnchor.UpperCenter);
-        _linesText.color = new Color(1f, 1f, 1f, 0.7f);
-        Place(_linesText.rectTransform, new Vector2(0.5f, 1f), new Vector2(0, -205), new Vector2(1000, 50));
+        _linesText = MakeText("Lines", root, 40, TextAnchor.UpperCenter);
+        _linesText.color = new Color(1f, 1f, 1f, 0.75f);
+        Place(_linesText.rectTransform, new Vector2(0.5f, 1f), new Vector2(0, -244), new Vector2(1000, 56));
+
+        _levelText = MakeText("Level", root, 60, TextAnchor.UpperLeft, FontStyle.Bold);
+        _levelText.color = new Color(0.45f, 0.95f, 0.85f);
+        Place(_levelText.rectTransform, new Vector2(0f, 1f), new Vector2(40, -44), new Vector2(520, 90));
 
         // ---- tray (bawah) ----
         float slotW = 300f, slotH = 340f, gap = 30f;
@@ -103,10 +101,10 @@ public class BlastUI : MonoBehaviour
             _slot[i] = bg.rectTransform;
             Place(_slot[i], new Vector2(0.5f, 0f), new Vector2(x, 40), new Vector2(slotW, slotH));
 
-            var lbl = MakeText("Lbl" + i, _slot[i], 34, TextAnchor.UpperCenter, FontStyle.Bold);
+            var lbl = MakeText("Lbl" + i, _slot[i], 40, TextAnchor.UpperCenter, FontStyle.Bold);
             lbl.text = (i + 1).ToString();
             lbl.color = new Color(1f, 1f, 1f, 0.6f);
-            Place(lbl.rectTransform, new Vector2(0.5f, 1f), new Vector2(0, -6), new Vector2(slotW, 44));
+            Place(lbl.rectTransform, new Vector2(0.5f, 1f), new Vector2(0, -6), new Vector2(slotW, 50));
 
             var holderGO = new GameObject("Cells" + i, typeof(RectTransform));
             holderGO.transform.SetParent(_slot[i], false);
@@ -126,19 +124,19 @@ public class BlastUI : MonoBehaviour
         prt.anchorMin = Vector2.zero; prt.anchorMax = Vector2.one; prt.pivot = new Vector2(0.5f, 0.5f);
         prt.offsetMin = Vector2.zero; prt.offsetMax = Vector2.zero;
 
-        var title = MakeText("GO_Title", _gameOverPanel.transform, 92, TextAnchor.MiddleCenter, FontStyle.Bold);
+        var title = MakeText("GO_Title", _gameOverPanel.transform, 120, TextAnchor.MiddleCenter, FontStyle.Bold);
         title.text = "GAME OVER";
         title.color = new Color(1f, 0.4f, 0.4f);
-        Place(title.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 240), new Vector2(1000, 150));
+        Place(title.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 240), new Vector2(1000, 180));
 
-        _gameOverFinal = MakeText("GO_Final", _gameOverPanel.transform, 52, TextAnchor.MiddleCenter);
-        Place(_gameOverFinal.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 60), new Vector2(1000, 200));
+        _gameOverFinal = MakeText("GO_Final", _gameOverPanel.transform, 64, TextAnchor.MiddleCenter);
+        Place(_gameOverFinal.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 60), new Vector2(1000, 220));
 
         var btn = MakeImage("Restart", _gameOverPanel.transform, new Color(0.30f, 0.65f, 0.95f, 1f));
         _restartRect = btn.rectTransform;
         Place(_restartRect, new Vector2(0.5f, 0.5f), new Vector2(0, -160), new Vector2(480, 150));
 
-        var btnText = MakeText("RestartTxt", btn.transform, 54, TextAnchor.MiddleCenter, FontStyle.Bold);
+        var btnText = MakeText("RestartTxt", btn.transform, 66, TextAnchor.MiddleCenter, FontStyle.Bold);
         btnText.text = "MAIN LAGI";
         Place(btnText.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 0), new Vector2(480, 150));
 
@@ -158,6 +156,7 @@ public class BlastUI : MonoBehaviour
         _scoreText.text = "Skor  " + core.Score;
         _comboText.text = core.Combo > 1 ? ("COMBO x" + core.Combo) : "";
         _linesText.text = "Baris hancur: " + core.LinesCleared;
+        _levelText.text = "LEVEL " + core.Level;
 
         RefreshTray(core);
 
@@ -210,12 +209,39 @@ public class BlastUI : MonoBehaviour
 
         foreach (var (dx, dy) in pc.Cells)
         {
-            var img = MakeImage("c", _cellHolder[i], col);
-            Place(img.rectTransform, new Vector2(0.5f, 0.5f),
-                  new Vector2((dx - cx) * cell, (dy - cy) * cell),
-                  new Vector2(cell * 0.92f, cell * 0.92f));
-            list.Add(img.gameObject);
+            var g = MakeCell3D(_cellHolder[i], col,
+                               new Vector2((dx - cx) * cell, (dy - cy) * cell),
+                               cell * 0.96f);
+            list.Add(g);
         }
+    }
+
+    // Potongan tray bergaya 3D: bayangan + badan (ber-outline) + gradasi bawah + kilap atas.
+    GameObject MakeCell3D(Transform parent, Color color, Vector2 pos, float size)
+    {
+        var contGO = new GameObject("cell", typeof(RectTransform));
+        contGO.transform.SetParent(parent, false);
+        var crt = contGO.GetComponent<RectTransform>();
+        Place(crt, new Vector2(0.5f, 0.5f), pos, new Vector2(size, size));
+
+        float inset = size * 0.94f;
+
+        var sh = MakeSpriteImage("sh", crt, new Color(0f, 0f, 0f, 0.35f));
+        Place(sh.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0f, -size * 0.06f), new Vector2(inset, inset));
+
+        var body = MakeSpriteImage("body", crt, color);
+        Place(body.rectTransform, new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(inset, inset));
+        var outline = body.gameObject.AddComponent<Outline>();
+        outline.effectColor = new Color(0f, 0f, 0f, 0.45f);
+        outline.effectDistance = new Vector2(3f, -3f);
+
+        var shade = MakeSpriteImage("shade", crt, new Color(0f, 0f, 0f, 0.18f));
+        Place(shade.rectTransform, new Vector2(0.5f, 0f), new Vector2(0f, size * 0.03f), new Vector2(inset * 0.98f, inset * 0.5f));
+
+        var gloss = MakeSpriteImage("gloss", crt, new Color(1f, 1f, 1f, 0.32f));
+        Place(gloss.rectTransform, new Vector2(0.5f, 1f), new Vector2(0f, -size * 0.07f), new Vector2(inset * 0.82f, inset * 0.4f));
+
+        return contGO;
     }
 
     // ==================================================================
@@ -251,10 +277,9 @@ public class BlastUI : MonoBehaviour
         if (game == null) return;
         game.Rebuild();
         if (input != null) input.ResetSelection();
-        for (int i = 0; i < 3; i++) { _lastPiece[i] = null; _lastUsed[i] = true; } // paksa gambar ulang tray
+        for (int i = 0; i < 3; i++) { _lastPiece[i] = null; _lastUsed[i] = true; }
     }
 
-    // Dipakai BlastInput supaya balok tidak jatuh saat menekan area UI.
     public bool IsOverInteractiveUI(Vector2 screenPos)
     {
         if (game == null) return false;
@@ -272,9 +297,6 @@ public class BlastUI : MonoBehaviour
     public static bool PointerBlocksPlacement(Vector2 screenPos)
         => Instance != null && Instance.IsOverInteractiveUI(screenPos);
 
-    // Slot tray (0-2) berisi potongan BELUM terpakai pada posisi layar ini,
-    // atau -1 kalau tidak ada. Dipakai BlastInput untuk model "seret DARI tray":
-    // menaruh hanya sah bila gestur seret DIMULAI di salah satu slot ini.
     public int TraySlotAt(Vector2 screenPos)
     {
         if (game == null) return -1;
@@ -307,6 +329,14 @@ public class BlastUI : MonoBehaviour
         t.raycastTarget = false;
         t.horizontalOverflow = HorizontalWrapMode.Overflow;
         t.verticalOverflow = VerticalWrapMode.Overflow;
+
+        // Custom look: shadow + outline biar teks tegas & memanjakan mata.
+        var shadow = goT.AddComponent<Shadow>();
+        shadow.effectColor = new Color(0f, 0f, 0f, 0.55f);
+        shadow.effectDistance = new Vector2(3f, -3f);
+        var ol = goT.AddComponent<Outline>();
+        ol.effectColor = new Color(0f, 0f, 0f, 0.6f);
+        ol.effectDistance = new Vector2(2f, 2f);
         return t;
     }
 
@@ -316,8 +346,47 @@ public class BlastUI : MonoBehaviour
         goI.transform.SetParent(parent, false);
         var img = goI.AddComponent<Image>();
         img.color = col;
-        img.raycastTarget = false; // hit-test manual, tak butuh raycaster
+        img.raycastTarget = false;
         return img;
+    }
+
+    Image MakeSpriteImage(string name, Transform parent, Color col)
+    {
+        var img = MakeImage(name, parent, col);
+        img.sprite = RoundSprite();
+        img.type = Image.Type.Sliced;
+        return img;
+    }
+
+    Sprite RoundSprite()
+    {
+        if (_roundSprite != null) return _roundSprite;
+        int size = 48, radius = 14;
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        tex.wrapMode = TextureWrapMode.Clamp;
+        tex.filterMode = FilterMode.Bilinear;
+        var px = new Color32[size * size];
+        for (int y = 0; y < size; y++)
+            for (int x = 0; x < size; x++)
+            {
+                float a = RoundedAlpha(x, y, size, size, radius);
+                px[y * size + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(a * 255f));
+            }
+        tex.SetPixels32(px);
+        tex.Apply();
+        float b = radius;
+        _roundSprite = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 100f, 0,
+                                     SpriteMeshType.FullRect, new Vector4(b, b, b, b));
+        return _roundSprite;
+    }
+
+    static float RoundedAlpha(int x, int y, int w, int h, float radius)
+    {
+        float px = x + 0.5f, py = y + 0.5f;
+        float dx = Mathf.Max(Mathf.Max(radius - px, px - (w - radius)), 0f);
+        float dy = Mathf.Max(Mathf.Max(radius - py, py - (h - radius)), 0f);
+        float dist = Mathf.Sqrt(dx * dx + dy * dy);
+        return Mathf.Clamp01(radius - dist + 0.5f);
     }
 
     void Place(RectTransform rt, Vector2 anchor, Vector2 pos, Vector2 size)
