@@ -442,6 +442,7 @@ GameObject:
   m_Component:
   - component: {fileID: 1343891800}
   - component: {fileID: 1343891799}
+  - component: {fileID: 1343891801}
   m_Layer: 0
   m_Name: Game
   m_TagString: Untagged
@@ -473,8 +474,9 @@ MonoBehaviour:
   drumRadiusFactor: 0.55
   showAxle: 1
   autoCamera: 1
-  camDistanceFactor: 3.2
-  camHeightFactor: 0.8
+  cameraFitPadding: 1.15
+  cameraHeightOffset: 0
+  demoFill: 0
   palette: []
 --- !u!4 &1343891800
 Transform:
@@ -491,6 +493,22 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1343891801
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1343891798}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d1d0f389016d8614abe9d8225fb36538, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::BlastInput
+  keyRotateSpeed: 90
+  dragRotateSpeed: 0.3
+  validColor: {r: 0.35, g: 0.9, b: 0.4, a: 0.5}
+  invalidColor: {r: 0.95, g: 0.3, b: 0.3, a: 0.5}
 --- !u!1 &1384079956
 GameObject:
   m_ObjectHideFlags: 0
