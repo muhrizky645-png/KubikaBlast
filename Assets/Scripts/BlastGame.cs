@@ -40,6 +40,18 @@ public class BlastGame : MonoBehaviour
     [Header("Debug")]
     public bool demoFill = false;
 
+    [Header("Bayangan (shadow)")]
+    // Matikan cast & receive shadow di semua blok/drum/flange/axle.
+    public bool disableShadows = true;
+    // Matikan juga shadow di semua Light pada scene (mis. Directional Light).
+    public bool disableSceneLightShadows = true;
+
+    [Header("Kecerdasan potongan (smart drop)")]
+    // 0 = potongan benar-benar ACAK (asal muat di papan).
+    // Makin tinggi = makin sering sengaja memberi potongan yang bisa langsung meng-clear.
+    // Turunkan (mis. 0.15) kalau mau terasa lebih acak; naikkan kalau mau lebih sering clear.
+    [Range(0f, 1f)] public float clearBias = 0.35f;
+
     [Header("Blok default saat mulai (starting fill)")]
     public bool startWithBlocks = true;
     [Range(0f, 1f)] public float startFillChance = 0.45f;
@@ -77,12 +89,15 @@ public class BlastGame : MonoBehaviour
 
         _radius = columns * cellWidth / (2f * Mathf.PI);
         _core = new BlastCore(columns, height, numColors);
+        _core.ClearBias = clearBias;
         _mesh = RoundedCube.Shared();
 
         BuildPalette();
         BuildReel();
 
         if (autoCamera && !_cameraFramed) { SetupCamera(); _cameraFramed = true; }
+
+        if (disableShadows) DisableLightShadows();
 
         if (demoFill) DemoFill();
         else if (startWithBlocks) StartingFill();
@@ -203,6 +218,7 @@ public class BlastGame : MonoBehaviour
         mf.sharedMesh = _mesh;
         var mr = go.AddComponent<MeshRenderer>();
         mr.sharedMaterial = _mats[color % _mats.Length];
+        if (disableShadows) DisableShadows(mr);
     }
 
     void SpawnClearEffect(BlastCore.ClearInfo clear)
@@ -243,6 +259,7 @@ public class BlastGame : MonoBehaviour
             Color baseC = (palette != null && colr[i] >= 0 && colr[i] < palette.Length)
                           ? palette[colr[i]] : Color.white;
             mr.material = MakeFxMaterial(baseC);
+            if (disableShadows) DisableShadows(mr);
 
             gos.Add(go); mrs.Add(mr); mats.Add(mr.material);
         }
@@ -368,13 +385,34 @@ public class BlastGame : MonoBehaviour
         var m = new Material(shader);
         if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", col);
         m.color = col;
-        go.GetComponent<MeshRenderer>().sharedMaterial = m;
+        var rend = go.GetComponent<MeshRenderer>();
+        rend.sharedMaterial = m;
+        if (disableShadows) DisableShadows(rend);
         var cc = go.GetComponent<Collider>();
         if (cc != null)
         {
             if (Application.isPlaying) Destroy(cc);
             else DestroyImmediate(cc);
         }
+    }
+
+    // ===== BAYANGAN (SHADOW) =====
+    void DisableShadows(Renderer r)
+    {
+        if (r == null) return;
+        r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        r.receiveShadows = false;
+    }
+
+    void DisableLightShadows()
+    {
+        if (!disableSceneLightShadows) return;
+#if UNITY_2022_2_OR_NEWER
+        var lights = FindObjectsByType<Light>(FindObjectsSortMode.None);
+#else
+        var lights = FindObjectsOfType<Light>();
+#endif
+        foreach (var l in lights) if (l != null) l.shadows = LightShadows.None;
     }
 
     void DemoFill()

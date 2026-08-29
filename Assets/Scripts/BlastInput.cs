@@ -41,7 +41,7 @@ using KubikaBlast;
 ///  - Auto-putar tabung saat jari dekat tepi layar (jangkau sisi tersembunyi).
 ///  - Feedback merah saat blok belum ketemu sel valid.
 ///
-/// Putar TABUNG: drag KLIK-KANAN / Q-E / panah / DUA JARI.
+/// Putar TABUNG: SATU JARI (seret di area tabung) / DUA JARI / drag KLIK-KANAN / Q-E / panah.
 /// </summary>
 [RequireComponent(typeof(BlastGame))]
 [DefaultExecutionOrder(1000)]
@@ -50,6 +50,10 @@ public class BlastInput : MonoBehaviour
     [Header("Kecepatan putar tabung")]
     public float keyRotateSpeed = 90f;    // derajat / detik (Q/E, panah kiri-kanan)
     public float dragRotateSpeed = 0.3f;  // derajat / pixel (drag klik-kanan atau 2 jari)
+
+    // Putar tabung pakai 1 JARI: seret 1 jari di area tabung (BUKAN slot tray/UI).
+    public bool oneFingerRotate = true;
+    public float fingerRotateSpeed = 0.3f; // derajat / pixel saat putar 1 jari
 
     [Header("Perilaku ghost / drag")]
     // true (HP): menaruh HANYA lewat seret DARI slot tray. false (mouse): preview saat hover.
@@ -124,6 +128,10 @@ public class BlastInput : MonoBehaviour
     // status drag-putar (klik-kanan)
     bool _rotating;
     float _lastPointerX;
+
+    // status putar 1 jari (seret di area tabung)
+    bool _fingerRotating;
+    float _lastFingerX;
 
     // deteksi seret: posisi saat mulai menekan + apakah sudah dihitung menyeret
     Vector2 _pressStartPos;
@@ -433,6 +441,26 @@ public class BlastInput : MonoBehaviour
 
         float twoFingerX = TwoFingerAvgDeltaX();
         if (Mathf.Abs(twoFingerX) > 0f) deltaDeg += -twoFingerX * dragRotateSpeed;
+
+        // ---- Putar tabung pakai 1 JARI: seret di area tabung (bukan slot tray/UI) ----
+        if (oneFingerRotate)
+        {
+            if (PointerPressedThisFrame() && !MultiTouchActive())
+            {
+                Vector2 p = PointerPosition();
+                bool onTray = BlastUI.TraySlotAtPointer(p) >= 0;
+                bool onUI = BlastUI.PointerBlocksPlacement(p);
+                if (!onTray && !onUI) { _fingerRotating = true; _lastFingerX = p.x; }
+            }
+            if (_fingerRotating && PointerHeld() && !MultiTouchActive())
+            {
+                float px = PointerPosition().x;
+                float dx = px - _lastFingerX;
+                _lastFingerX = px;
+                deltaDeg += -dx * fingerRotateSpeed;
+            }
+            if (PointerReleased() || MultiTouchActive()) _fingerRotating = false;
+        }
 
         if (Mathf.Abs(deltaDeg) > 0.0001f)
             _game.transform.Rotate(0f, deltaDeg, 0f, Space.World);

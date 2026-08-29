@@ -44,6 +44,10 @@ namespace KubikaBlast
         public int LinesCleared;
         public int Combo;
 
+        // 0 = potongan sepenuhnya ACAK (asal muat di papan); makin tinggi makin sering
+        // sengaja memberi potongan yang bisa langsung meng-clear. Diatur dari BlastGame.
+        public double ClearBias = 0.35;
+
         // Level naik tiap LEVEL_STEP skor. Mulai dari 1.
         public int Level => Math.Max(1, Score / LEVEL_STEP + 1);
 
@@ -97,77 +101,96 @@ namespace KubikaBlast
         void RefillTray()
         {
             var scratch = (int[,])Grid.Clone();
+            var usedSigs = new HashSet<string>();
             for (int i = 0; i < TRAY_SIZE; i++)
-                Tray[i] = GenerateSmartPiece(scratch);
+                Tray[i] = GenerateSmartPiece(scratch, usedSigs);
         }
 
-        Piece GenerateSmartPiece(int[,] scratch)
+        // Tanda tangan kanonik sebuah bentuk (buat cegah bentuk kembar dalam satu tray).
+        static string ShapeSig((int x, int y)[] shape)
+        {
+            var pts = new List<(int x, int y)>(shape);
+            pts.Sort((a, b) => a.y != b.y ? a.y - b.y : a.x - b.x);
+            var sb = new StringBuilder();
+            foreach (var (x, y) in pts) { sb.Append(x); sb.Append(','); sb.Append(y); sb.Append(';'); }
+            return sb.ToString();
+        }
+
+        // Pilih potongan: TETAP dijamin muat (di-carve dari celah nyata di papan), tapi
+        // bentuknya dipilih ACAK di antara semua yang muat (bukan selalu yang paling
+        // optimal), jadi tidak lagi itu-itu saja. ClearBias sesekali memaksa bentuk
+        // yang bisa langsung meng-clear supaya tetap seru.
+        Piece GenerateSmartPiece(int[,] scratch, HashSet<string> usedSigs)
         {
             var pool = Shapes.PoolForLevel(Level);
 
-            // Acak urutan bentuk biar variatif.
-            int[] order = new int[pool.Length];
-            for (int i = 0; i < pool.Length; i++) order[i] = i;
-            for (int i = order.Length - 1; i > 0; i--)
-            {
-                int j = _rng.Next(i + 1);
-                int tmp = order[i]; order[i] = order[j]; order[j] = tmp;
-            }
-
-            (int x, int y)[] bestShape = null;
-            int bestCol = 0, bestRow = 0;
-            double bestScore = double.NegativeInfinity;
-
-            foreach (int oi in order)
+            // Untuk tiap bentuk yang MUAT, simpan posisi TERBAIK-nya + apakah bisa clear.
+            var fits = new List<(int idx, int col, int row, bool clears, string sig)>();
+            for (int oi = 0; oi < pool.Length; oi++)
             {
                 var shape = pool[oi];
+                double best = double.NegativeInfinity;
+                int bcol = 0, brow = 0; bool any = false;
                 for (int row = 0; row < Height; row++)
-                {
                     for (int col = 0; col < Columns; col++)
                     {
                         if (!FitsOn(scratch, shape, col, row)) continue;
-                        double s = ScorePlacement(scratch, shape, col, row) + _rng.NextDouble() * 0.5;
-                        if (s > bestScore)
-                        {
-                            bestScore = s;
-                            bestShape = shape;
-                            bestCol = col;
-                            bestRow = row;
-                        }
+                        any = true;
+                        double s = ScorePlacement(scratch, shape, col, row);
+                        if (s > best) { best = s; bcol = col; brow = row; }
                     }
-                }
+                if (any) fits.Add((oi, bcol, brow, best >= 100.0, ShapeSig(shape)));
             }
 
-            if (bestShape == null)
+            (int x, int y)[] chosenShape = null;
+            int chosenCol = 0, chosenRow = 0;
+
+            if (fits.Count > 0)
+            {
+                // Utamakan bentuk yang belum dipakai di tray ini biar variatif.
+                var bag = fits.FindAll(f => !usedSigs.Contains(f.sig));
+                if (bag.Count == 0) bag = fits;
+
+                var clearers = bag.FindAll(f => f.clears);
+                var pick = (clearers.Count > 0 && _rng.NextDouble() < ClearBias)
+                    ? clearers[_rng.Next(clearers.Count)]
+                    : bag[_rng.Next(bag.Count)];
+
+                chosenShape = pool[pick.idx];
+                chosenCol = pick.col; chosenRow = pick.row;
+                usedSigs.Add(pick.sig);
+            }
+
+            if (chosenShape == null)
             {
                 // Papan hampir penuh: cari sel kosong apa pun untuk potongan Titik.
-                for (int row = 0; row < Height && bestShape == null; row++)
-                    for (int col = 0; col < Columns && bestShape == null; col++)
+                for (int row = 0; row < Height && chosenShape == null; row++)
+                    for (int col = 0; col < Columns && chosenShape == null; col++)
                         if (scratch[col, row] == -1)
                         {
-                            bestShape = new (int x, int y)[] { (0, 0) };
-                            bestCol = col; bestRow = row;
+                            chosenShape = new (int x, int y)[] { (0, 0) };
+                            chosenCol = col; chosenRow = row;
                         }
             }
-            if (bestShape == null)
+            if (chosenShape == null)
             {
                 // Benar-benar penuh: kembalikan Titik apa adanya (memicu game over nanti).
-                bestShape = new (int x, int y)[] { (0, 0) };
-                bestCol = 0; bestRow = 0;
+                chosenShape = new (int x, int y)[] { (0, 0) };
+                chosenCol = 0; chosenRow = 0;
             }
 
             // Pesan slot di scratch supaya potongan berikutnya tidak menimpa (tanpa clear,
             // agar setiap slot terpilih tetap kosong di papan ASLI => dijamin muat).
             int color = _rng.Next(_numColors);
-            foreach (var (dx, dy) in bestShape)
+            foreach (var (dx, dy) in chosenShape)
             {
-                int r = bestRow + dy;
-                int c = Wrap(bestCol + dx);
+                int r = chosenRow + dy;
+                int c = Wrap(chosenCol + dx);
                 if (r >= 0 && r < Height) scratch[c, r] = color;
             }
 
-            var cells = new (int x, int y)[bestShape.Length];
-            Array.Copy(bestShape, cells, bestShape.Length);
+            var cells = new (int x, int y)[chosenShape.Length];
+            Array.Copy(chosenShape, cells, chosenShape.Length);
             return new Piece { Cells = cells, Color = color, Used = false };
         }
 
