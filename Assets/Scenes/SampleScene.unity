@@ -4711,8 +4711,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 16b65c88d2496fa47ae7eb232f01f5f3, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::BlastGame
-  columns: 16
-  height: 6
+  columns: 12
+  height: 7
   numColors: 5
   cellWidth: 1
   cellHeight: 1
@@ -4724,13 +4724,16 @@ MonoBehaviour:
   showAxle: 1
   autoCamera: 1
   cameraFov: 35
-  cameraZoomOut: 1.5
-  cameraTilt: 8
+  cameraZoomOut: 2
+  cameraTilt: 5
   cameraAimHeight: 0.3
   enableClearFx: 1
   clearFxDuration: 0.4
   clearStepDelay: 0.06
   demoFill: 0
+  disableShadows: 1
+  disableSceneLightShadows: 1
+  clearBias: 0.35
   startWithBlocks: 1
   startFillChance: 0.45
   startRandomColors: 1
@@ -4774,6 +4777,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::BlastInput
   keyRotateSpeed: 90
   dragRotateSpeed: 0.3
+  oneFingerRotate: 1
+  fingerRotateSpeed: 0.3
   ghostOnlyWhileDragging: 1
   dragThreshold: 12
   ghostHighlightColor: {r: 0.6550014, g: 0.9716981, b: 0.56376827, a: 0}
