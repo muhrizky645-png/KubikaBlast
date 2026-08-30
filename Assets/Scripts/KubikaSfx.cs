@@ -10,10 +10,14 @@ using KubikaBlast; // untuk membaca status BlastCore
 /// Taruh file ini di folder "Assets" lalu tekan Play.
 ///
 /// SUARA PUJIAN:
-///   - Kalau kamu menaruh file suara di Assets/Resources/Voice/ (good.wav,
-///     awesome.wav, amazing.wav, fantastic.wav, incredible.wav, unstoppable.wav,
-///     legendary.wav) -> otomatis dipakai suara ASLI itu.
-///   - Kalau file tidak ada -> otomatis pakai sting musik yang naik tiap combo.
+///   - Kalau kamu menaruh file suara di Assets/Resources/Voice/ (good, awesome,
+///     amazing, fantastic, incredible, unstoppable, legendary; .mp3/.wav/.ogg)
+///     -> otomatis dipakai suara ASLI itu.
+///   - Kalau tidak ada -> otomatis pakai sting musik yang naik tiap combo.
+///
+/// STREAK: tingkat pujian pakai penghitung streak berbasis WAKTU (praiseWindow),
+/// bukan Combo bawaan game yang cepat reset. Selama clear berikutnya masih dalam
+/// praiseWindow detik, tingkatnya terus naik.
 /// </summary>
 public class KubikaSfx : MonoBehaviour
 {
@@ -23,6 +27,10 @@ public class KubikaSfx : MonoBehaviour
     [Range(0f, 1f)] public float sfxVolume = 0.8f;
     [Range(0f, 1f)] public float musicVolume = 0.32f;
     public bool musicEnabled = true;
+
+    [Header("Pujian (announcer)")]
+    [Tooltip("Berapa detik jeda maksimum antar-clear agar streak pujian terus naik.")]
+    [Range(1f, 30f)] public float praiseWindow = 10f;
 
     const int SampleRate = 44100;
     const int SPARK_STEPS = 31;
@@ -36,6 +44,9 @@ public class KubikaSfx : MonoBehaviour
     BlastCore _lastCore;
     int _pScore, _pLines, _pLevel;
     bool _pGameOver;
+
+    int _streak;
+    float _lastClearTime = -999f;
 
     static readonly string[] VoiceKeys =
         { "good", "awesome", "amazing", "fantastic", "incredible", "unstoppable", "legendary" };
@@ -94,6 +105,8 @@ public class KubikaSfx : MonoBehaviour
         if (!ReferenceEquals(core, _lastCore))
         {
             _lastCore = core;
+            _streak = 0;
+            _lastClearTime = -999f;
             Prime(core);
             return;
         }
@@ -104,10 +117,15 @@ public class KubikaSfx : MonoBehaviour
 
             if (core.LinesCleared > _pLines)
             {
+                // Streak berbasis waktu: lanjut naik bila masih dalam praiseWindow.
+                if (Time.time - _lastClearTime <= praiseWindow) _streak++;
+                else _streak = 1;
+                _lastClearTime = Time.time;
+
                 int cells = (core.LastClear.Cells != null) ? core.LastClear.Cells.Count : 0;
                 if (cells <= 0) cells = (core.LinesCleared - _pLines) * Mathf.Max(1, core.Columns);
-                StartCoroutine(ClearCascade(cells, core.Combo));
-                PlayPraise(core.Combo);
+                StartCoroutine(ClearCascade(cells, _streak));
+                PlayPraise(_streak);
             }
 
             if (core.Level > _pLevel)
@@ -128,10 +146,18 @@ public class KubikaSfx : MonoBehaviour
         _pGameOver = core.GameOver;
     }
 
-    // ====== Suara pujian: Good / Awesome / Amazing ... ======
-    public void PlayPraise(int combo)
+    // ==================================================================
+    // API publik (dipakai KubikaMenu untuk klik tombol, dsb.)
+    // ==================================================================
+    public void PlayPlace() { _sfx.pitch = 1f; _sfx.PlayOneShot(_place, 0.6f * sfxVolume); }
+    public void PlayLevelUp() { _melodic.pitch = 1f; _melodic.PlayOneShot(_levelUp, 0.85f * sfxVolume); }
+    public void PlayGameOver() { _melodic.pitch = 1f; _melodic.PlayOneShot(_gameOver, 0.9f * sfxVolume); }
+    public void PlayClick() { _sfx.pitch = 1f; _sfx.PlayOneShot(_click, 0.55f * sfxVolume); }
+    public void PlayInvalid() { _sfx.pitch = 1f; _sfx.PlayOneShot(_invalid, 0.6f * sfxVolume); }
+
+    public void PlayPraise(int tier)
     {
-        int i = Mathf.Clamp(combo - 1, 0, VoiceKeys.Length - 1);
+        int i = Mathf.Clamp(tier - 1, 0, VoiceKeys.Length - 1);
         var voice = Resources.Load<AudioClip>("Voice/" + VoiceKeys[i]);
         if (voice != null)
         {
@@ -139,33 +165,37 @@ public class KubikaSfx : MonoBehaviour
             _voiceSrc.PlayOneShot(voice, 0.95f * sfxVolume);
             return;
         }
-        // fallback: sting musik naik makin tinggi per combo
-        float pitch = Mathf.Pow(1.05946f, Mathf.Clamp((combo - 1) * 2, 0, 18));
+        float pitch = Mathf.Pow(1.05946f, Mathf.Clamp((tier - 1) * 2, 0, 18));
         _voiceSrc.pitch = pitch;
         _voiceSrc.PlayOneShot(_praise, 0.8f * sfxVolume);
     }
 
-    // ====== KASKADE HANCUR: nada naik sinkron block pecah 1-per-1 ======
-    IEnumerator ClearCascade(int cellCount, int combo)
+    IEnumerator ClearCascade(int cellCount, int tier)
     {
-        int n = Mathf.Clamp(cellCount, 1, 28);
+        int n = Mathf.Clamp(cellCount, 1, 24);
         float delay = 0.06f;
         if (_game != null && _game.clearStepDelay > 0f) delay = _game.clearStepDelay;
-        int comboLift = Mathf.Clamp(combo - 1, 0, 5) * 2;
+
+        // BATAS nada: cegah suara terlalu melengking saat 2-3 baris hancur sekaligus.
+        // Dulu nada memanjat oktaf terus (bisa ~4 kHz). Sekarang diplafon.
+        const int MAX_STEP = 16;                    // plafon nada (~1.3 oktaf dari dasar)
+        int lift = Mathf.Clamp(tier - 1, 0, 3) * 2; // kenaikan per-tier dibatasi
         int[] penta = { 0, 2, 4, 7, 9 };
         var wait = new WaitForSeconds(delay);
 
         for (int i = 0; i < n; i++)
         {
-            int oct = i / penta.Length;
-            int semi = Mathf.Clamp(oct * 12 + penta[i % penta.Length] + comboLift, 0, SPARK_STEPS - 1);
-            float vol = Mathf.Lerp(0.9f, 0.5f, (float)i / n);
+            // Oktaf hanya berselang 0/1 (tidak memanjat tanpa henti) lalu diplafon.
+            int octave = (i / penta.Length) % 2;
+            int semi = Mathf.Clamp(octave * 12 + penta[i % penta.Length] + lift, 0, MAX_STEP);
+            float vol = Mathf.Lerp(0.85f, 0.45f, (float)i / n);
             _sparkSrc.PlayOneShot(_sparks[semi], vol * sfxVolume);
             yield return wait;
         }
 
-        int topIndex = Mathf.Clamp(((n - 1) / penta.Length) * 12 + comboLift + 12, 0, SPARK_STEPS - 1);
-        _sparkSrc.PlayOneShot(_sparks[topIndex], 0.55f * sfxVolume);
+        // Sparkle penutup juga diplafon supaya tidak menusuk.
+        int topIndex = Mathf.Clamp(penta[penta.Length - 1] + lift + 4, 0, MAX_STEP);
+        _sparkSrc.PlayOneShot(_sparks[topIndex], 0.5f * sfxVolume);
     }
 
     // ==================================================================
@@ -196,7 +226,6 @@ public class KubikaSfx : MonoBehaviour
             });
         }
 
-        // Sting pujian (fallback bila tak ada file suara): arpeggio mayor ceria.
         _praise = MakeClip("sfx_praise", 0.42f, t =>
         {
             float[] f = { 523f, 659f, 784f };
@@ -218,133 +247,100 @@ public class KubikaSfx : MonoBehaviour
         {
             float[] f = { 523f, 440f, 349f, 262f };
             return Seq(t, f, 0.22f, (freq, lt) =>
-                (Tri(freq, lt) * 0.5f + Sine(freq, lt) * 0.3f + Square(freq, lt) * 0.08f)
-                * Mathf.Exp(-lt * 5.5f)) * 0.6f;
+                (Sine(freq, lt) * 0.5f + Tri(freq, lt) * 0.2f)
+                * Mathf.Exp(-lt * 6f) * (1f - Mathf.Exp(-lt * 200f))) * 0.8f;
         });
 
-        _click = MakeClip("sfx_click", 0.06f, t => Sine(1300f, t) * Mathf.Exp(-t * 60f) * 0.5f);
-
-        _invalid = MakeClip("sfx_invalid", 0.16f, t =>
+        _click = MakeClip("sfx_click", 0.07f, t =>
         {
-            float env = Mathf.Exp(-t * 22f);
-            float gate = (Mathf.Floor(t * 80f) % 2f == 0f) ? 1f : 0.3f;
-            return Square(150f, t) * env * gate * 0.5f;
+            float env = Mathf.Exp(-t * 55f) * (1f - Mathf.Exp(-t * 900f));
+            return (Sine(660f, t) * 0.5f + Sine(990f, t) * 0.2f) * env;
         });
 
-        _music_clip = BuildMusic();
-    }
-
-    public void PlayPlace()   => PlayOn(_sfx, _place, 0.9f);
-    public void PlayClick()   => PlayOn(_sfx, _click, 0.7f);
-    public void PlayInvalid() => PlayOn(_sfx, _invalid, 0.8f);
-    public void PlayLevelUp() => PlayOn(_melodic, _levelUp, 1f);
-    public void PlayGameOver()=> PlayOn(_melodic, _gameOver, 1f);
-
-    void PlayOn(AudioSource src, AudioClip clip, float vol, float pitch = 1f)
-    {
-        if (clip == null || src == null) return;
-        src.pitch = pitch;
-        src.PlayOneShot(clip, vol * sfxVolume);
-    }
-
-    // ====== BACKGROUND MUSIC (loop) ======
-    AudioClip BuildMusic()
-    {
-        float bpm = 96f;
-        float beat = 60f / bpm;
-        int beatsPerBar = 4, bars = 4;
-        int totalBeats = bars * beatsPerBar;
-        int count = Mathf.CeilToInt(totalBeats * beat * SampleRate);
-        var buf = new float[count];
-
-        int[] barRoot = { 60, 55, 57, 53 };
-        bool[] barMinor = { false, false, true, false };
-
-        for (int bar = 0; bar < bars; bar++)
+        _invalid = MakeClip("sfx_invalid", 0.18f, t =>
         {
-            int root = barRoot[bar];
-            int[] triad = barMinor[bar] ? new[] { 0, 3, 7 } : new[] { 0, 4, 7 };
-            for (int b = 0; b < beatsPerBar; b++)
-            {
-                int beatIndex = bar * beatsPerBar + b;
-                float tStart = beatIndex * beat;
-                if (b == 0 || b == 2)
-                    AddNote(buf, tStart, beat * 0.95f, Midi(root - 12), 0.18f, VoiceBass);
-                foreach (var d in triad)
-                    AddNote(buf, tStart, beat, Midi(root + d), 0.045f, VoicePad);
-                for (int e = 0; e < 2; e++)
-                {
-                    int step = beatIndex * 2 + e;
-                    int deg = triad[step % 3];
-                    AddNote(buf, tStart + e * beat * 0.5f, beat * 0.5f * 0.95f, Midi(root + 12 + deg), 0.11f, VoicePluck);
-                }
-            }
-        }
+            float env = Mathf.Exp(-t * 18f);
+            float f = Mathf.Lerp(220f, 150f, Mathf.Clamp01(t / 0.12f));
+            float body = Sine(f, t) * 0.5f + Tri(f, t) * 0.18f;
+            float grit = (Random.value * 2f - 1f) * 0.12f * Mathf.Exp(-t * 30f);
+            return (body + grit) * env;
+        });
 
-        float peak = 0f;
-        for (int i = 0; i < count; i++) peak = Mathf.Max(peak, Mathf.Abs(buf[i]));
-        if (peak > 0.9f) { float k = 0.9f / peak; for (int i = 0; i < count; i++) buf[i] *= k; }
-
-        var clip = AudioClip.Create("bgm_loop", count, 1, SampleRate, false);
-        clip.SetData(buf, 0);
-        return clip;
+        BuildMusic();
     }
 
-    void AddNote(float[] buf, float startSec, float durSec, float freq, float amp,
-                 System.Func<float, float, float, float> voice)
+    void BuildMusic()
     {
-        int start = Mathf.RoundToInt(startSec * SampleRate);
-        int len = Mathf.RoundToInt(durSec * SampleRate);
-        for (int i = 0; i < len; i++)
+        // Loop 9.6 detik = 16 ketuk @100 BPM. Progresi akor Am - F - C - G.
+        const float loopDur = 9.6f;
+        const float beat = 0.6f;
+        float[] roots = { 220.00f, 174.61f, 261.63f, 196.00f };
+
+        _music_clip = MakeClip("music_loop", loopDur, t =>
         {
-            int idx = start + i;
-            if (idx < 0 || idx >= buf.Length) continue;
-            buf[idx] += voice(freq, (float)i / SampleRate, durSec) * amp;
-        }
+            int beatIdx = (int)(t / beat);
+            int bar = (beatIdx / 4) % roots.Length;
+            float root = roots[bar];
+            float inBeat = t - beatIdx * beat;
+
+            // Bass: pulsa root tiap ketuk.
+            float bassEnv = Mathf.Exp(-inBeat * 3.5f) * (1f - Mathf.Exp(-inBeat * 120f));
+            float bass = (Sine(root * 0.5f, t) * 0.6f + Tri(root * 0.5f, t) * 0.2f) * bassEnv * 0.35f;
+
+            // Pad akor lembut (root + kuint).
+            float pad = Sine(root, t) * 0.05f + Sine(root * 1.5f, t) * 0.04f;
+
+            // Arpeggio ringan tiap 1/2 ketuk.
+            float arpStep = beat * 0.5f;
+            int arpIdx = (int)(t / arpStep);
+            float inArp = t - arpIdx * arpStep;
+            float[] mult = { 1f, 1.25f, 1.5f, 2f };
+            float arpFreq = root * mult[arpIdx % mult.Length];
+            float arp = Sine(arpFreq * 2f, t) * 0.055f * Mathf.Exp(-inArp * 8f);
+
+            float mix = bass + pad + arp;
+
+            // Fade tipis di ujung loop supaya sambungan mulus (tanpa "klik").
+            float fade = 1f;
+            if (t < 0.04f) fade = t / 0.04f;
+            else if (t > loopDur - 0.04f) fade = (loopDur - t) / 0.04f;
+
+            return mix * fade * 0.9f;
+        });
     }
 
-    static float VoicePluck(float f, float lt, float dur)
+    // ==================================================================
+    // DSP helpers
+    // ==================================================================
+    AudioClip MakeClip(string name, float dur, System.Func<float, float> fn)
     {
-        float env = Mathf.Exp(-lt * 7f) * (1f - Mathf.Exp(-lt * 400f));
-        return (Sine(f, lt) * 0.7f + Sine(2f * f, lt) * 0.18f + Tri(f, lt) * 0.12f) * env;
-    }
-    static float VoiceBass(float f, float lt, float dur)
-    {
-        float env = Mathf.Exp(-lt * 3.2f) * (1f - Mathf.Exp(-lt * 250f));
-        return (Sine(f, lt) * 0.8f + Tri(f, lt) * 0.2f) * env;
-    }
-    static float VoicePad(float f, float lt, float dur)
-    {
-        float atk = Mathf.Clamp01(lt / 0.12f);
-        float rel = Mathf.Clamp01((dur - lt) / 0.18f);
-        return (Sine(f, lt) * 0.6f + Sine(2f * f, lt) * 0.15f) * atk * rel;
-    }
-
-    // ====== Synth core ======
-    AudioClip MakeClip(string name, float duration, System.Func<float, float> gen)
-    {
-        int count = Mathf.CeilToInt(duration * SampleRate);
+        int count = Mathf.Max(1, Mathf.CeilToInt(SampleRate * dur));
         var data = new float[count];
         for (int i = 0; i < count; i++)
         {
             float t = (float)i / SampleRate;
-            float tail = Mathf.Min(1f, (count - i) / (0.003f * SampleRate));
-            data[i] = Mathf.Clamp(gen(t) * tail, -1f, 1f);
+            data[i] = Mathf.Clamp(fn(t), -1f, 1f);
         }
         var clip = AudioClip.Create(name, count, 1, SampleRate, false);
         clip.SetData(data, 0);
         return clip;
     }
 
-    static float Seq(float t, float[] freqs, float noteDur, System.Func<float, float, float> voice)
+    static float Sine(float freq, float t) => Mathf.Sin(2f * Mathf.PI * freq * t);
+
+    static float Tri(float freq, float t)
     {
-        int idx = Mathf.FloorToInt(t / noteDur);
-        if (idx < 0 || idx >= freqs.Length) return 0f;
-        return voice(freqs[idx], t - idx * noteDur);
+        float p = (t * freq) % 1f;
+        if (p < 0f) p += 1f;
+        return 4f * Mathf.Abs(p - 0.5f) - 1f;
     }
 
-    static float Midi(int m) => 440f * Mathf.Pow(2f, (m - 69) / 12f);
-    static float Sine(float f, float t)   => Mathf.Sin(2f * Mathf.PI * f * t);
-    static float Square(float f, float t) => Mathf.Sign(Sine(f, t));
-    static float Tri(float f, float t)    => 2f * Mathf.Abs(2f * (t * f - Mathf.Floor(t * f + 0.5f))) - 1f;
+    // Memainkan urutan frekuensi, tiap langkah selebar 'step' detik.
+    float Seq(float t, float[] freqs, float step, System.Func<float, float, float> voice)
+    {
+        if (freqs == null || freqs.Length == 0) return 0f;
+        int idx = Mathf.Clamp((int)(t / step), 0, freqs.Length - 1);
+        float lt = t - idx * step;
+        return voice(freqs[idx], lt);
+    }
 }

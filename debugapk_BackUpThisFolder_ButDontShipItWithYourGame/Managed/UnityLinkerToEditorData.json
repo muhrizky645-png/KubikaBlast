@@ -64,7 +64,9 @@
           },
           {
             "name": "AudioClip",
-            "scenes": [],
+            "scenes": [
+              "Assets/Scenes/SampleScene.unity"
+            ],
             "dependencyType": 0,
             "icon": null
           },
@@ -84,8 +86,16 @@
           },
           {
             "name": "AudioResource",
+            "scenes": [
+              "Assets/Scenes/SampleScene.unity"
+            ],
+            "dependencyType": 0,
+            "icon": null
+          },
+          {
+            "name": "AudioSource",
             "scenes": [],
-            "dependencyType": 1,
+            "dependencyType": 0,
             "icon": null
           },
           {

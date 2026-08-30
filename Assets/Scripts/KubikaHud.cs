@@ -7,32 +7,38 @@ using KubikaBlast;
 /// HUD juicy gaya Block Blast untuk Kubika Blast (ADD-ON, tanpa edit BlastUI).
 ///
 /// >>> TANPA EDIT KODE GAME & TANPA SETTING UNITY <<<
-/// Taruh file ini di folder "Assets" (mis. Assets/Scripts/KubikaHud.cs), tekan Play.
+/// Taruh file ini di folder "Assets", tekan Play.
 ///
-/// Otomatis:
-///  - Menyembunyikan teks Score/Level/Combo bawaan BlastUI, lalu menggambar
-///    versi animasi di posisi yang sama (pakai canvas & skala yang sama).
-///  - SCORE: angka saja + animasi NAIK per-digit (count-up) + punch.
-///  - LEVEL: punch saat naik level.
-///  - COMBO: pop-up "COMBO xN" (muncul membesar lalu mengecil).
-///  - PUJIAN: teks pop-up di tengah "GOOD! / AWESOME!! / AMAZING!! ..." tiap clear,
-///    tingkatnya mengikuti combo (suaranya di-handle KubikaSfx).
+/// - Menyembunyikan Score/Level/Combo/"Baris hancur" bawaan BlastUI.
+/// - SCORE: angka saja + count-up per-digit + punch SEKALI tiap skor berubah
+///   (tidak lagi berkedut saat combo). Diturunkan ke posisi teks "Baris hancur".
+/// - LEVEL: punch saat naik.
+/// - COMBO: kotak sendiri = teks "COMBO xN" (pop) + BAR KUNING timer yang menyusut
+///   selama comboWindow. Selama clear berikutnya dalam comboWindow detik, streak
+///   terus naik (Good -> Awesome -> ...). Pujian muncul pop-up di tengah.
 /// </summary>
 public class KubikaHud : MonoBehaviour
 {
     public static KubikaHud Instance { get; private set; }
 
+    [Tooltip("Berapa detik jeda maksimum antar-clear agar combo/pujian terus naik.")]
+    [Range(1f, 30f)] public float comboWindow = 10f;
+
     BlastGame _game;
     BlastCore _lastCore;
     bool _ready;
 
-    Text _score, _level, _combo, _praise;
-    RectTransform _scoreRT, _levelRT, _comboRT, _praiseRT;
-    Vector2 _praiseBase, _comboBase;
+    Text _score, _level, _praise, _comboText;
+    RectTransform _scoreRT, _levelRT, _praiseRT, _comboBox, _comboFill;
+    Vector2 _praiseBase;
+    float _comboBarWidth = 560f;
 
     float _scoreDisplay, _scorePulse, _comboPop, _levelPulse, _praiseT;
-    int _lastLines, _shownCombo = -1, _shownLevel = -1;
+    int _lastLines, _shownCombo = -1, _shownLevel = -1, _lastScoreTarget;
     bool _praiseActive;
+
+    int _streak;
+    float _lastClearTime = -999f;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void AutoBootstrap()
@@ -50,7 +56,6 @@ public class KubikaHud : MonoBehaviour
 
     void Update()
     {
-        // Jika UI dibangun ulang (scene reload) referensi bisa hilang -> setup lagi.
         if (_ready && (_score == null || _level == null)) _ready = false;
         if (!_ready) { TrySetup(); if (!_ready) return; }
 
@@ -59,44 +64,56 @@ public class KubikaHud : MonoBehaviour
         var core = _game.Core;
         if (core == null) return;
 
-        // Reset baseline saat game baru / restart.
         if (!ReferenceEquals(core, _lastCore))
         {
             _lastCore = core;
             _scoreDisplay = core.Score;
+            _lastScoreTarget = core.Score;
             _lastLines = core.LinesCleared;
-            _shownCombo = core.Combo;
+            _shownCombo = -1;
             _shownLevel = core.Level;
+            _streak = 0;
+            _lastClearTime = -999f;
             _praiseActive = false;
             SetAlpha(_praise, 0f);
-            if (_combo != null) _combo.text = "";
+            if (_comboBox != null) _comboBox.gameObject.SetActive(false);
         }
 
         AnimateScore(core);
         AnimateLevel(core);
-        AnimateCombo(core);
         DetectClear(core);
+        AnimateCombo();
         AnimatePraise();
     }
 
-    // ================= SCORE (angka saja + count-up per-digit) =================
     void AnimateScore(BlastCore core)
     {
         int target = core.Score;
-        if (target < Mathf.RoundToInt(_scoreDisplay)) _scoreDisplay = target; // snap turun
+
+        // Punch HANYA sekali saat skor benar-benar berubah (bukan tiap frame),
+        // supaya tidak berkedut selama count-up combo.
+        if (target != _lastScoreTarget)
+        {
+            if (target > _lastScoreTarget) _scorePulse = 1f;
+            _lastScoreTarget = target;
+        }
+
+        if (target < Mathf.RoundToInt(_scoreDisplay)) _scoreDisplay = target;
         if (_scoreDisplay < target)
         {
             float diff = target - _scoreDisplay;
-            float step = Mathf.Max(diff * Time.deltaTime * 7f, 40f * Time.deltaTime);
+            float step = Mathf.Max(diff * Time.deltaTime * 6f, 60f * Time.deltaTime);
             _scoreDisplay = Mathf.Min(target, _scoreDisplay + step);
-            _scorePulse = 1f;
         }
         _score.text = Mathf.RoundToInt(_scoreDisplay).ToString();
-        _scorePulse = Mathf.MoveTowards(_scorePulse, 0f, Time.deltaTime * 4f);
-        _scoreRT.localScale = Vector3.one * (1f + 0.14f * _scorePulse);
+
+        // Skor dibuat STABIL: tanpa punch skala sama sekali, supaya angka tidak
+        // bergetar/berkedut saat skor naik beruntun selama combo. Count-up tetap
+        // jalan (angka bergulir naik halus), hanya efek skala yang dihilangkan.
+        _scorePulse = 0f;
+        _scoreRT.localScale = Vector3.one;
     }
 
-    // ================= LEVEL (punch saat naik) =================
     void AnimateLevel(BlastCore core)
     {
         if (core.Level != _shownLevel)
@@ -109,34 +126,50 @@ public class KubikaHud : MonoBehaviour
         _levelRT.localScale = Vector3.one * (1f + 0.22f * _levelPulse);
     }
 
-    // ================= COMBO (pop-up) =================
-    void AnimateCombo(BlastCore core)
-    {
-        if (_combo == null) return;
-        if (core.Combo >= 2 && core.Combo != _shownCombo)
-        {
-            _combo.text = "COMBO x" + core.Combo;
-            _comboPop = 1f;
-        }
-        if (core.Combo < 2) _combo.text = "";
-        _shownCombo = core.Combo;
-
-        _comboPop = Mathf.MoveTowards(_comboPop, 0f, Time.deltaTime * 3f);
-        _comboRT.localScale = Vector3.one * (1f + 0.6f * _comboPop);
-    }
-
-    // ================= PUJIAN (Good/Awesome/Amazing...) =================
     void DetectClear(BlastCore core)
     {
         if (core.LinesCleared > _lastLines)
-            ShowPraise(core.Combo);
+        {
+            if (Time.time - _lastClearTime <= comboWindow) _streak++;
+            else _streak = 1;
+            _lastClearTime = Time.time;
+            ShowPraise(_streak);
+        }
         _lastLines = core.LinesCleared;
     }
 
-    void ShowPraise(int combo)
+    void AnimateCombo()
     {
-        _praise.text = PraiseFor(combo);
-        _praise.color = PraiseColor(combo);
+        if (_comboBox == null) return;
+
+        if (_streak > 0 && Time.time - _lastClearTime > comboWindow) _streak = 0;
+
+        bool show = _streak >= 2;
+        if (_comboBox.gameObject.activeSelf != show) _comboBox.gameObject.SetActive(show);
+        if (!show) { _shownCombo = _streak; return; }
+
+        if (_streak != _shownCombo)
+        {
+            _comboText.text = "COMBO x" + _streak;
+            _comboPop = 1f;
+            _shownCombo = _streak;
+        }
+
+        // Bar kuning timer: menyusut dari penuh -> kosong selama comboWindow.
+        float remain = Mathf.Clamp01(1f - (Time.time - _lastClearTime) / Mathf.Max(0.01f, comboWindow));
+        var sd = _comboFill.sizeDelta;
+        sd.x = _comboBarWidth * remain;
+        _comboFill.sizeDelta = sd;
+
+        _comboPop = Mathf.MoveTowards(_comboPop, 0f, Time.deltaTime * 3f);
+        float s = 1f + 0.5f * _comboPop;
+        _comboBox.localScale = new Vector3(s, s, 1f);
+    }
+
+    void ShowPraise(int tier)
+    {
+        _praise.text = PraiseFor(tier);
+        _praise.color = PraiseColor(tier);
         _praiseActive = true;
         _praiseT = 0f;
         _praiseRT.anchoredPosition = _praiseBase;
@@ -160,9 +193,9 @@ public class KubikaHud : MonoBehaviour
         _praiseRT.anchoredPosition = _praiseBase + new Vector2(0f, Mathf.Lerp(0f, 70f, k));
     }
 
-    string PraiseFor(int combo)
+    string PraiseFor(int tier)
     {
-        switch (Mathf.Clamp(combo, 1, 99))
+        switch (Mathf.Clamp(tier, 1, 99))
         {
             case 1: return "GOOD!";
             case 2: return "AWESOME!!";
@@ -174,9 +207,9 @@ public class KubikaHud : MonoBehaviour
         }
     }
 
-    Color PraiseColor(int combo)
+    Color PraiseColor(int tier)
     {
-        switch (Mathf.Clamp(combo, 1, 99))
+        switch (Mathf.Clamp(tier, 1, 99))
         {
             case 1: return new Color(0.55f, 0.95f, 0.55f);
             case 2: return new Color(0.35f, 0.80f, 1.00f);
@@ -188,7 +221,6 @@ public class KubikaHud : MonoBehaviour
         }
     }
 
-    // ================= SETUP: clone teks bawaan lalu sembunyikan aslinya =================
     void TrySetup()
     {
         var ui = FindFirstObjectByType<BlastUI>();
@@ -198,7 +230,8 @@ public class KubikaHud : MonoBehaviour
         Text srcScore = FindText(ui, "_scoreText", "Score", "Skor");
         Text srcLevel = FindText(ui, "_levelText", "Level", "LEVEL");
         Text srcCombo = FindText(ui, "_comboText", "Combo", "COMBO");
-        if (srcScore == null || srcLevel == null) return; // UI belum dibangun
+        Text srcLines = FindText(ui, "_linesText", "Lines", "Baris");
+        if (srcScore == null || srcLevel == null) return;
 
         Transform parent = srcScore.transform.parent;
 
@@ -206,18 +239,22 @@ public class KubikaHud : MonoBehaviour
         _scoreRT = _score.rectTransform;
         _score.fontSize = Mathf.RoundToInt(srcScore.fontSize * 1.05f);
 
+        if (srcLines != null)
+        {
+            var lrt = srcLines.rectTransform;
+            _scoreRT.anchorMin = lrt.anchorMin;
+            _scoreRT.anchorMax = lrt.anchorMax;
+            _scoreRT.pivot = lrt.pivot;
+            _scoreRT.anchoredPosition = lrt.anchoredPosition;
+            srcLines.enabled = false;
+        }
+
         _level = Clone(srcLevel, srcLevel.color);
         _levelRT = _level.rectTransform;
 
-        if (srcCombo != null)
-        {
-            _combo = Clone(srcCombo, new Color(1f, 0.85f, 0.3f));
-            _combo.fontStyle = FontStyle.Bold;
-            _combo.text = "";
-            _comboRT = _combo.rectTransform;
-            _comboBase = _comboRT.anchoredPosition;
-            srcCombo.enabled = false;
-        }
+        if (srcCombo != null) srcCombo.enabled = false;
+
+        BuildComboBox(parent, srcScore.font);
 
         _praise = MakePraise(srcScore.font, parent);
         _praiseRT = _praise.rectTransform;
@@ -227,6 +264,63 @@ public class KubikaHud : MonoBehaviour
         srcLevel.enabled = false;
 
         _ready = true;
+    }
+
+    void BuildComboBox(Transform parent, Font font)
+    {
+        var boxGO = new GameObject("Hud_ComboBox", typeof(RectTransform));
+        boxGO.transform.SetParent(parent, false);
+        _comboBox = boxGO.GetComponent<RectTransform>();
+        _comboBox.anchorMin = _comboBox.anchorMax = new Vector2(0.5f, 1f);
+        _comboBox.pivot = new Vector2(0.5f, 1f);
+        _comboBox.sizeDelta = new Vector2(720f, 150f);
+        _comboBox.anchoredPosition = new Vector2(0f, -360f);
+
+        // Teks COMBO xN
+        var tGO = new GameObject("Txt", typeof(RectTransform));
+        tGO.transform.SetParent(_comboBox, false);
+        _comboText = tGO.AddComponent<Text>();
+        _comboText.font = font;
+        _comboText.fontStyle = FontStyle.Bold;
+        _comboText.fontSize = 72;
+        _comboText.alignment = TextAnchor.UpperCenter;
+        _comboText.horizontalOverflow = HorizontalWrapMode.Overflow;
+        _comboText.verticalOverflow = VerticalWrapMode.Overflow;
+        _comboText.raycastTarget = false;
+        _comboText.color = new Color(1f, 0.85f, 0.25f);
+        var trt = _comboText.rectTransform;
+        trt.anchorMin = trt.anchorMax = new Vector2(0.5f, 1f);
+        trt.pivot = new Vector2(0.5f, 1f);
+        trt.sizeDelta = new Vector2(720f, 90f);
+        trt.anchoredPosition = Vector2.zero;
+        AddFx(tGO);
+
+        // Latar bar
+        var bgGO = new GameObject("Bar", typeof(RectTransform));
+        bgGO.transform.SetParent(_comboBox, false);
+        var bg = bgGO.AddComponent<Image>();
+        bg.color = new Color(0f, 0f, 0f, 0.4f);
+        bg.raycastTarget = false;
+        var brt = bg.rectTransform;
+        brt.anchorMin = brt.anchorMax = new Vector2(0.5f, 1f);
+        brt.pivot = new Vector2(0.5f, 1f);
+        brt.sizeDelta = new Vector2(_comboBarWidth, 26f);
+        brt.anchoredPosition = new Vector2(0f, -98f);
+
+        // Isi bar (kuning), nempel kiri, menyusut dari kanan
+        var fGO = new GameObject("Fill", typeof(RectTransform));
+        fGO.transform.SetParent(bgGO.transform, false);
+        var fill = fGO.AddComponent<Image>();
+        fill.color = new Color(1f, 0.82f, 0.15f, 1f);
+        fill.raycastTarget = false;
+        _comboFill = fill.rectTransform;
+        _comboFill.anchorMin = new Vector2(0f, 0f);
+        _comboFill.anchorMax = new Vector2(0f, 1f);
+        _comboFill.pivot = new Vector2(0f, 0.5f);
+        _comboFill.anchoredPosition = Vector2.zero;
+        _comboFill.sizeDelta = new Vector2(_comboBarWidth, 0f);
+
+        _comboBox.gameObject.SetActive(false);
     }
 
     Text Clone(Text src, Color col)
@@ -253,13 +347,7 @@ public class KubikaHud : MonoBehaviour
         t.raycastTarget = false;
         t.color = col;
 
-        var ol = go.AddComponent<Outline>();
-        ol.effectColor = new Color(0f, 0f, 0f, 0.65f);
-        ol.effectDistance = new Vector2(3f, -3f);
-        var sh = go.AddComponent<Shadow>();
-        sh.effectColor = new Color(0f, 0f, 0f, 0.5f);
-        sh.effectDistance = new Vector2(2f, -2f);
-
+        AddFx(go);
         go.transform.SetAsLastSibling();
         return t;
     }
@@ -285,19 +373,22 @@ public class KubikaHud : MonoBehaviour
         t.raycastTarget = false;
         t.text = "";
 
-        var ol = go.AddComponent<Outline>();
-        ol.effectColor = new Color(0f, 0f, 0f, 0.7f);
-        ol.effectDistance = new Vector2(4f, -4f);
-        var sh = go.AddComponent<Shadow>();
-        sh.effectColor = new Color(0f, 0f, 0f, 0.5f);
-        sh.effectDistance = new Vector2(3f, -3f);
-
+        AddFx(go);
         SetAlpha(t, 0f);
         go.transform.SetAsLastSibling();
         return t;
     }
 
-    // Cari Text: 1) via field privat BlastUI, 2) fallback via nama GO / isi teks.
+    static void AddFx(GameObject go)
+    {
+        var ol = go.AddComponent<Outline>();
+        ol.effectColor = new Color(0f, 0f, 0f, 0.7f);
+        ol.effectDistance = new Vector2(3f, -3f);
+        var sh = go.AddComponent<Shadow>();
+        sh.effectColor = new Color(0f, 0f, 0f, 0.5f);
+        sh.effectDistance = new Vector2(2f, -2f);
+    }
+
     Text FindText(BlastUI ui, string field, string goName, string prefix)
     {
         var f = typeof(BlastUI).GetField(field, BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance);
