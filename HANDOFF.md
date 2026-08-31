@@ -53,10 +53,10 @@ Balok-balok ditaruh pada permukaan **silinder** (tabung) yang bisa diputar.
 |---|---|
 | `BlastCore.cs` | **Otak permainan.** Murni logika, tanpa Unity API. Grid, tray, skor, combo, level, permata, game over. |
 | `Shapes.cs` | Kamus bentuk balok + kolam bentuk per level. |
-| `BlastGame.cs` | Jembatan logika -> dunia 3D. Membangun silinder, render balok, efek clear, getar kamera, hit-stop, **event**. |
+| `BlastGame.cs` | Jembatan logika -> dunia 3D. Membangun silinder, render balok, efek clear, getar kamera, hit-stop, jam combo, **event**. |
 | `BlastInput.cs` | Drag balok dari tray, hantu penempatan, pratinjau clear, putar silinder. |
 | `BlastUI.cs` | HUD dalam permainan (skor, combo, baris, level) + tray. |
-| `KubikaHud.cs` | Kotak combo besar + kata pujian (GOOD! ... LEGENDARY!). |
+| `KubikaHud.cs` | Kotak combo besar + kata pujian (GOOD! ... LEGENDARY!), mulai dari clear ke-2. |
 | `KubikaMenu.cs` | Home, Jeda, Pengaturan, **Game Over**, papan peringkat. |
 | `KubikaItems.cs` | Permata, item (Hammer/Bomb/Undo), bubble, iklan simulasi, toko. |
 | `KubikaSfx.cs` | Semua suara & musik, dibangkitkan secara prosedural (tanpa file audio). |
@@ -116,6 +116,43 @@ public static int   GemsFor(int lines, int combo);
 
 Statistik yang tersedia untuk layar Game Over: `BestCombo`, `PiecesPlaced`,
 `CellsCleared`, `GemsEarned`, `LinesCleared`.
+
+### Combo memakai JENDELA WAKTU 10 detik
+
+```csharp
+public const double COMBO_WINDOW = 10.0;  // detik
+
+public double Clock;                       // diisi dari luar, bukan dari Unity
+public double LastClearTime;
+public double ComboTimeLeft  { get; }      // sisa detik
+public float  ComboFraction  { get; }      // 0..1, dipakai bar di HUD
+public void   TickCombo(double now);
+```
+
+Aturan lengkapnya:
+
+1. Clear menyambung rantai kalau datang **sebelum** 10 detik sejak clear
+   terakhir. Kalau lewat, rantai mulai lagi dari 1.
+2. **Menaruh balok tanpa clear TIDAK memutus rantai.** Yang memutus hanya
+   **waktu**.
+3. **Tingkat pujian = `Combo - 1`.** Clear pertama sengaja diam, clear kedua
+   "GOOD!", ketiga "AWESOME!!", dan seterusnya sampai "LEGENDARY!!".
+4. Alat (Palu/Bom) tidak menyentuh combo maupun jendelanya - rantai harus hasil
+   bermain, bukan hasil membeli.
+
+> **Jangan ulangi ini:** sempat dicoba combo "beruntun ketat", yaitu setiap
+> penempatan yang tidak meng-clear langsung menolkan combo. Di atas kertas
+> masuk akal, di praktik hancur - begitu satu ring hancur, baris itu kosong,
+> sehingga balok berikutnya hampir mustahil langsung meng-clear lagi. Combo
+> praktis tidak pernah sampai 2 dan pemain **cuma pernah melihat "GOOD!"**
+> sepanjang permainan. `BlastTest.TestComboWindow()` mengunci aturan nomor 2
+> supaya tidak diam-diam kembali.
+
+`BlastCore` murni C# dan tidak tahu waktu Unity, jadi jamnya digerakkan dari
+luar. `BlastGame.Update()` memanggil `_core.TickCombo(Time.time)` tiap frame.
+Sengaja `Time.time` (**terskala**), bukan `Time.unscaledTime`: `KubikaMenu`
+menyetel `timeScale = 0` saat jeda, sehingga membuka menu jeda tidak
+menghanguskan rantai combo yang sedang berjalan.
 
 ### Harga item (`KubikaItems.PRICE`)
 
@@ -184,6 +221,8 @@ hal. Daftar berikut adalah pemilik sahnya.
 | `Application.targetFrameRate` | `KubikaPerf` | `KubikaPerf.SetFps(n)` |
 | Layar Game Over | `KubikaMenu` | - |
 | Rumus skor/level/permata | `BlastCore` | `MultiplierFor` / `GemsFor` |
+| Angka combo & jendelanya | `BlastCore` | baca `Combo` / `ComboFraction` |
+| Jam yang menggerakkan combo | `BlastGame.Update` | `core.TickCombo(Time.time)` |
 
 Catatan penting:
 
@@ -193,6 +232,11 @@ Catatan penting:
   sendiri, jaring pengaman akan langsung membatalkannya.
 - **FPS** disimpan di PlayerPrefs `kubika_fps`; `KubikaMenu` menulis kunci yang
   sama. PlayerPrefs adalah sumber kebenarannya.
+- **Combo pernah punya TIGA penghitung** yang saling bertentangan:
+  `BlastCore.Combo` (membayar skor & permata), `KubikaHud._streak` (timer 10
+  detik, mengatur kata pujian), dan `KubikaSfx._streak` (timer 15 detik,
+  mengatur nada). Angka yang dilihat pemain tidak pernah sama dengan angka yang
+  membayar. Sekarang semuanya membaca `BlastCore.Combo` - termasuk timernya.
 - **Layar Game Over.** Dulu ada DUA layar bertumpuk: satu di `BlastUI`
   (sortingOrder 100) dan satu di `KubikaMenu` (300). Yang tersembunyi tetap
   jalan tiap frame dan tombolnya duduk persis di bawah tombol yang terlihat.
@@ -264,6 +308,9 @@ Kalimat motivasi dipilih berdasarkan hasil main, dari empat kolam
 `ratio = Score / rekor sebelumnya`. Untuk mengubah kalimatnya, sunting keempat
 array itu - tidak ada tempat lain yang perlu disentuh.
 
+> **Rencana:** kalimat motivasi di layar ini nantinya diganti **efek suara hasil
+> render ElevenLabs**, bukan teks. Keempat kolam di atas sifatnya sementara.
+
 ---
 
 ## 10. Ranjau yang mudah terinjak
@@ -285,6 +332,9 @@ array itu - tidak ada tempat lain yang perlu disentuh.
   `BlastTest` menjaga aturan ini.
 - **Animasi UI memakai `Time.unscaledDeltaTime`.** Saat menu terbuka
   `timeScale = 0`, jadi `Time.deltaTime` bernilai nol dan animasi membeku.
+- **Jam combo justru memakai waktu TERSKALA** (`Time.time`), kebalikan dari
+  animasi UI. Ini disengaja: jendela combo harus ikut membeku saat pemain
+  membuka menu jeda.
 
 ---
 
@@ -300,7 +350,8 @@ build). Cara memakainya:
 Atau centang `runOnStart` - hanya berpengaruh di dalam Editor.
 
 Yang diuji: wrap kolom, clear ring, sel terhalang, potongan yang melintasi
-sambungan, aturan skor & pengali, clear dari alat, dan komposisi kolam bentuk.
+sambungan, aturan skor & pengali, **jendela combo 10 detik**, clear dari alat,
+dan komposisi kolam bentuk.
 
 ---
 
@@ -312,6 +363,10 @@ kembali seluruhnya.
 
 > Repo ini **tidak terindeks** oleh pencarian kode GitHub; `search_code` selalu
 > mengembalikan nol hasil. Pakai `get_file_contents` dan baca file utuh.
+
+> **Hati-hati file besar.** `KubikaItems.cs` (~56 KB) pernah terkirim
+> **terpotong di tengah fungsi** dan tetap dilaporkan sukses oleh API. Selalu
+> periksa bahwa isi yang dikirim berakhir dengan kurung kurawal penutup kelas.
 
 ---
 
