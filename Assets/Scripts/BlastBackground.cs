@@ -125,8 +125,12 @@ public class BlastBackground : MonoBehaviour
             mr.sharedMaterial = _mat;
         }
 
-        // ---- Gelembung mengambang ----
-        if (_ps == null)
+        // ---- Gelembung mengambang DINONAKTIFKAN (BgBubbles dihapus permanen) ----
+        // Blok di bawah sengaja dimatikan dengan if(false) agar BgBubbles tidak
+        // pernah dibuat. Gradient background tetap jalan. Kalau suatu saat mau
+        // menghidupkan lagi tanpa error: ganti if(false) -> if(_ps == null) DAN
+        // tambahkan baris "vel.z = new ParticleSystem.MinMaxCurve(0f, 0f);" setelah vel.x.
+        if (false)
         {
             float pdist = gdist * 0.82f;
             float ph = 2f * pdist * Mathf.Tan(_cam.fieldOfView * 0.5f * Mathf.Deg2Rad);

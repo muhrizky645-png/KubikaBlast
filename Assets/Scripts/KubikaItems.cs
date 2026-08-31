@@ -3,6 +3,7 @@
 #define USE_NEW_INPUT
 #endif
 
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
@@ -55,9 +56,10 @@ public class KubikaItems : MonoBehaviour
     Camera _cam;
     bool _built;
 
-    Canvas _play, _modal;
+    Canvas _play, _modal, _backCanvas;
     Font _font;
     Sprite _round;
+    Sprite _spHammer, _spBomb, _spUndo, _spGem, _spCrown;
 
     // Item bar (di atas tray)
     GameObject _itemBar;
@@ -75,6 +77,11 @@ public class KubikaItems : MonoBehaviour
     RectTransform _bubbleRT;
     Item _bubbleItem;
     float _nextBubble;
+    bool _bubbleLanded;
+    float _bubbleHoverUntil;
+    Sprite _bubbleSprite;
+    const float BUBBLE_STOP_Y = -360f;
+    static readonly Vector2 GEM_TARGET = new Vector2(-456f, 962f);
 
     // Konfirmasi iklan
     GameObject _confirm;
@@ -268,6 +275,7 @@ public class KubikaItems : MonoBehaviour
             // Ada clear. Hadiah = nilai combo (min 1). Combo besar -> permata lebih banyak.
             int gain = Mathf.Max(1, _core.Combo);
             AddGems(gain);
+            StartCoroutine(GemBurst(gain));
         }
         _lastLines = _core.LinesCleared;
     }
@@ -289,15 +297,29 @@ public class KubikaItems : MonoBehaviour
             SpawnBubble();
         }
 
-        // Jatuhkan.
-        if (_bubble != null && _bubble.activeSelf)
+        if (_bubble == null || !_bubble.activeSelf) return;
+
+        var p = _bubbleRT.anchoredPosition;
+        if (!_bubbleLanded)
         {
-            var p = _bubbleRT.anchoredPosition;
-            p.y -= 300f * Time.deltaTime; // px/detik
+            // Jatuh sampai BERHENTI di atas tray.
+            p.y -= 320f * Time.deltaTime;
+            if (p.y <= BUBBLE_STOP_Y)
+            {
+                p.y = BUBBLE_STOP_Y;
+                _bubbleLanded = true;
+                _bubbleHoverUntil = Time.unscaledTime + 6.5f;
+            }
             _bubbleRT.anchoredPosition = p;
-            _bubbleRT.Rotate(0f, 0f, 40f * Time.deltaTime);
-            if (p.y < -1300f) { _bubble.SetActive(false); ScheduleNextBubble(); }
         }
+        else
+        {
+            // Mengambang pelan di tempat, lalu pergi kalau tak di-tap.
+            p.y = BUBBLE_STOP_Y + Mathf.Sin(Time.unscaledTime * 2.2f) * 16f;
+            _bubbleRT.anchoredPosition = p;
+            if (Time.unscaledTime >= _bubbleHoverUntil) { _bubble.SetActive(false); ScheduleNextBubble(); }
+        }
+        _bubbleRT.localRotation = Quaternion.Euler(0f, 0f, Mathf.Sin(Time.unscaledTime * 1.6f) * 8f);
     }
 
     void ScheduleNextBubble() { _nextBubble = Time.unscaledTime + Random.Range(9f, 17f); }
@@ -305,14 +327,30 @@ public class KubikaItems : MonoBehaviour
     void SpawnBubble()
     {
         _bubbleItem = (Item)Random.Range(0, 3);
-        _bubbleRT.anchoredPosition = new Vector2(Random.Range(-380f, 380f), 1250f);
+        // Jalur kiri / kanan tabung (bergantian acak), mulai dari atas layar.
+        float lane = (Random.value < 0.5f) ? -430f : 430f;
+        _bubbleRT.anchoredPosition = new Vector2(lane, 1300f);
         _bubbleRT.localRotation = Quaternion.identity;
+        _bubbleLanded = false;
         var img = _bubble.GetComponent<Image>();
-        img.color = ICOL[(int)_bubbleItem];
-        _bubbleLabel.text = NAME[(int)_bubbleItem];
+        var bSp = (_bubbleItem == Item.Hammer) ? _spHammer : (_bubbleItem == Item.Bomb) ? _spBomb : _spUndo;
+        if (bSp != null)
+        {
+            _bubbleIcon.sprite = bSp;
+            _bubbleIcon.gameObject.SetActive(true);
+            _bubbleLabel.text = "";
+            img.color = new Color(0.70f, 0.88f, 1f, 0.55f); // kaca kebiruan
+        }
+        else
+        {
+            _bubbleIcon.gameObject.SetActive(false);
+            _bubbleLabel.text = NAME[(int)_bubbleItem];
+            var ic = ICOL[(int)_bubbleItem]; img.color = new Color(ic.r, ic.g, ic.b, 0.7f);
+        }
         _bubble.SetActive(true);
     }
     Text _bubbleLabel;
+    Image _bubbleIcon;
 
     // ============================================================
     //  IKLAN (SIMULASI)
@@ -380,8 +418,8 @@ public class KubikaItems : MonoBehaviour
     {
         _mode = m;
         _hintText.text = (m == Mode.Hammer)
-            ? "PALU: tap 1 block untuk dihancurkan"
-            : "BOM: tap block, area 3x3 hancur";
+            ? "PALU: tap 1 block -> 1 baris + 1 kolom hancur"
+            : "BOM: tap block -> area 4x4 hancur";
     }
 
     void CancelTarget() { _mode = Mode.None; }
@@ -392,28 +430,56 @@ public class KubikaItems : MonoBehaviour
         if (_cam == null) return;
         if (!RaycastCell(sp, out int c, out int r)) return; // meleset -> tetap di mode
 
+        // Kumpulkan sel yang terdampak.
+        var cells = new List<(int c, int r)>();
         if (_mode == Mode.Hammer)
         {
-            _core.Grid[c, r] = -1;
-            AddItem(Item.Hammer, -1);
+            for (int rr = 0; rr < _core.Height; rr++) cells.Add((c, rr));             // kolom vertikal penuh
+            for (int cc = 0; cc < _core.Columns; cc++) if (cc != c) cells.Add((cc, r)); // baris (cincin) penuh
         }
         else if (_mode == Mode.Bomb)
         {
-            for (int dc = -1; dc <= 1; dc++)
-                for (int dr = -1; dr <= 1; dr++)
+            // 4x4: sel yang di-tap = 1 titik kiri-bawah dari titik tengah (offset -1..+2).
+            for (int dc = -1; dc <= 2; dc++)
+                for (int dr = -1; dr <= 2; dr++)
                 {
                     int cc = _core.Wrap(c + dc);
                     int rr = r + dr;
-                    if (rr >= 0 && rr < _core.Height) _core.Grid[cc, rr] = -1;
+                    if (rr >= 0 && rr < _core.Height) cells.Add((cc, rr));
                 }
-            AddItem(Item.Bomb, -1);
         }
+        else return;
+
+        // Rekam warna + posisi (lokal papan) SEBELUM grid dibersihkan, untuk efek.
+        var caps = new List<(int color, Vector3 pos, Quaternion rot)>();
+        var seen = new HashSet<int>();
+        foreach (var (cc, rr) in cells)
+        {
+            int key = cc * 1000 + rr;
+            if (!seen.Add(key)) continue;
+            if (rr < 0 || rr >= _core.Height) continue;
+            int col = _core.Grid[cc, rr];
+            if (col < 0) continue;
+            caps.Add((col, _game.CellToWorld(cc, rr), _game.CellRotation(cc)));
+        }
+
+        bool bomb = _mode == Mode.Bomb;
+        Vector3 center = _game.CellToWorld(c, r);
+
+        // Hapus dari grid + render (sinkron -> baseline UNDO tetap benar).
+        foreach (var (cc, rr) in cells)
+            if (rr >= 0 && rr < _core.Height) _core.Grid[cc, rr] = -1;
+
+        AddItem(bomb ? Item.Bomb : Item.Hammer, -1);
+        if (KubikaSfx.Instance != null) { if (bomb) KubikaSfx.Instance.PlayBomb(); else KubikaSfx.Instance.PlayHammer(); }
 
         _game.RenderGrid();
         _selfModified = true;
         _hasUndo = false;        // aksi item tidak bisa di-undo
         TakeSnapshot();
         _mode = Mode.None;
+
+        StartCoroutine(BlockFx(caps, bomb, center));
     }
 
     // Pasang collider sementara ke tiap block, raycast, lalu ambil (c,r) dari nama.
@@ -477,7 +543,7 @@ public class KubikaItems : MonoBehaviour
     void UpdateItemCounts()
     {
         for (int i = 0; i < 3; i++) if (_itemCount[i] != null) _itemCount[i].text = "x" + GetItem((Item)i);
-        if (_gemLabel != null) _gemLabel.text = "Permata: " + GetGems();
+        if (_gemLabel != null) _gemLabel.text = GetGems().ToString();
     }
 
     void FlashHint(string msg)
@@ -547,10 +613,13 @@ public class KubikaItems : MonoBehaviour
     void BuildUI()
     {
         _built = true;
+        LoadIcons();
+        _backCanvas = MakeCanvas("KubikaItemsBack", 5);   // di belakang UI lain (bubble)
         _play = MakeCanvas("KubikaItemsCanvas", 150);
         _modal = MakeCanvas("KubikaItemsModal", 330);
 
         BuildItemBar();
+        BuildGemHud();
         BuildHint();
         BuildBubble();
         BuildConfirm();
@@ -599,6 +668,18 @@ public class KubikaItems : MonoBehaviour
             lbl.text = NAME[i];
             Place(lbl.rectTransform, C, new Vector2(0, 10), new Vector2(210, 90));
 
+            var itSp = (i == 0) ? _spHammer : (i == 1) ? _spBomb : _spUndo;
+            if (itSp != null)
+            {
+                var icon = MakeImage("icon" + i, rt, Color.white);
+                icon.sprite = itSp;
+                icon.preserveAspect = true;
+                Place(icon.rectTransform, C, new Vector2(0, 26), new Vector2(120, 120));
+                lbl.fontSize = 30;
+                Place(lbl.rectTransform, C, new Vector2(0, -52), new Vector2(210, 50));
+                btn.color = new Color(ICOL[i].r, ICOL[i].g, ICOL[i].b, 0.30f);
+            }
+
             var badge = MakeSprite("badge" + i, rt, new Color(0f, 0f, 0f, 0.55f));
             Place(badge.rectTransform, new Vector2(1f, 1f), new Vector2(-6, -6), new Vector2(84, 60));
             var cnt = MakeText("cnt" + i, badge.rectTransform, 40, TextAnchor.MiddleCenter, FontStyle.Bold, new Color(1f, 0.9f, 0.4f));
@@ -607,9 +688,25 @@ public class KubikaItems : MonoBehaviour
             _itemCount[i] = cnt;
         }
 
-        _gemLabel = MakeText("gem", barGO.transform, 44, TextAnchor.MiddleCenter, FontStyle.Bold, new Color(0.55f, 0.95f, 1f));
-        _gemLabel.text = "Permata: 0";
-        Place(_gemLabel.rectTransform, new Vector2(0.5f, 0f), new Vector2(0, 580), new Vector2(700, 70));
+    }
+
+    void BuildGemHud()
+    {
+        // Chip permata di KIRI ATAS (di bawah baris Level).
+        var pill = MakeSprite("gemPill", _play.transform, new Color(0.10f, 0.12f, 0.20f, 0.72f));
+        Place(pill.rectTransform, new Vector2(0f, 1f), new Vector2(36f, -196f), new Vector2(300f, 92f));
+
+        if (_spGem != null)
+        {
+            var gi = MakeImage("gemIcon", _play.transform, Color.white);
+            gi.sprite = _spGem;
+            gi.preserveAspect = true;
+            Place(gi.rectTransform, new Vector2(0f, 1f), new Vector2(52f, -206f), new Vector2(64f, 64f));
+        }
+
+        _gemLabel = MakeText("gem", _play.transform, 46, TextAnchor.MiddleLeft, FontStyle.Bold, new Color(0.72f, 0.95f, 1f));
+        _gemLabel.text = "0";
+        Place(_gemLabel.rectTransform, new Vector2(0f, 1f), new Vector2(128f, -206f), new Vector2(180f, 72f));
     }
 
     void BuildHint()
@@ -635,26 +732,33 @@ public class KubikaItems : MonoBehaviour
 
     void BuildBubble()
     {
-        var img = MakeSprite("Bubble", _play.transform, ICOL[0]);
+        var img = MakeImage("Bubble", _backCanvas.transform, new Color(0.70f, 0.88f, 1f, 0.55f));
+        img.sprite = BubbleSprite();
+        img.type = Image.Type.Simple;
+        img.preserveAspect = true;
         _bubble = img.gameObject;
         _bubbleRT = img.rectTransform;
         _bubbleRT.anchorMin = _bubbleRT.anchorMax = _bubbleRT.pivot = C;
-        _bubbleRT.sizeDelta = new Vector2(170, 170);
-        _bubbleRT.anchoredPosition = new Vector2(0, 1250);
+        _bubbleRT.sizeDelta = new Vector2(190, 190);
+        _bubbleRT.anchoredPosition = new Vector2(430, 1300);
         _bubbleLabel = MakeText("bubTxt", _bubbleRT, 40, TextAnchor.MiddleCenter, FontStyle.Bold, Color.white);
         _bubbleLabel.text = NAME[0];
         Place(_bubbleLabel.rectTransform, C, Vector2.zero, new Vector2(170, 170));
+        _bubbleIcon = MakeImage("bubIcon", _bubbleRT, Color.white);
+        _bubbleIcon.preserveAspect = true;
+        Place(_bubbleIcon.rectTransform, C, Vector2.zero, new Vector2(128, 128));
+        _bubbleIcon.gameObject.SetActive(false);
         _bubble.SetActive(false);
     }
 
     void BuildConfirm()
     {
         _confirm = MakeFullPanel(_modal.transform, "Confirm", new Color(0f, 0f, 0f, 0.6f));
-        var card = MakeCard(_confirm.transform, new Vector2(0, 60), new Vector2(820, 560), new Color(0.12f, 0.13f, 0.24f, 0.97f));
+        var card = MakeCard(_confirm.transform, new Vector2(0, 40), new Vector2(820, 700), new Color(0.12f, 0.13f, 0.24f, 0.97f));
         _confirmText = MakeText("cTxt", card, 52, TextAnchor.MiddleCenter, FontStyle.Bold, Color.white);
-        Place(_confirmText.rectTransform, C, new Vector2(0, 150), new Vector2(760, 220));
-        _btnYes = MakeButton(card, "YA, NONTON", new Vector2(0, -60), new Vector2(560, 150), new Color(0.30f, 0.75f, 0.40f), 60);
-        _btnNo = MakeButton(card, "TIDAK", new Vector2(0, -230), new Vector2(560, 130), new Color(0.5f, 0.5f, 0.58f), 54);
+        Place(_confirmText.rectTransform, C, new Vector2(0, 190), new Vector2(760, 240));
+        _btnYes = MakeButton(card, "YA, NONTON", new Vector2(0, -30), new Vector2(560, 150), new Color(0.30f, 0.75f, 0.40f), 60);
+        _btnNo = MakeButton(card, "TIDAK", new Vector2(0, -210), new Vector2(560, 130), new Color(0.5f, 0.5f, 0.58f), 54);
         _confirm.SetActive(false);
     }
 
@@ -676,6 +780,13 @@ public class KubikaItems : MonoBehaviour
         var title = MakeText("sTitle", card, 84, TextAnchor.MiddleCenter, FontStyle.Bold, new Color(1f, 0.85f, 0.3f));
         title.text = "TOKO PERMATA";
         Place(title.rectTransform, C, new Vector2(0, 590), new Vector2(880, 130));
+        if (_spCrown != null)
+        {
+            var cr = MakeImage("shopCrown", card, Color.white);
+            cr.sprite = _spCrown;
+            cr.preserveAspect = true;
+            Place(cr.rectTransform, C, new Vector2(-370, 720), new Vector2(84, 84));
+        }
 
         _shopGems = MakeText("sGems", card, 54, TextAnchor.MiddleCenter, FontStyle.Bold, new Color(0.55f, 0.95f, 1f));
         Place(_shopGems.rectTransform, C, new Vector2(0, 470), new Vector2(880, 80));
@@ -689,6 +800,16 @@ public class KubikaItems : MonoBehaviour
             Place(nm.rectTransform, C, new Vector2(-320, 40), new Vector2(360, 70));
             _shopOwned[i] = MakeText("o" + i, row, 36, TextAnchor.MiddleLeft, FontStyle.Normal, new Color(0.8f, 0.85f, 0.95f));
             Place(_shopOwned[i].rectTransform, C, new Vector2(-320, -40), new Vector2(360, 60));
+            var rowSp = (i == 0) ? _spHammer : (i == 1) ? _spBomb : _spUndo;
+            if (rowSp != null)
+            {
+                var ri = MakeImage("ri" + i, row, Color.white);
+                ri.sprite = rowSp;
+                ri.preserveAspect = true;
+                Place(ri.rectTransform, C, new Vector2(-370, 0), new Vector2(110, 110));
+                Place(nm.rectTransform, C, new Vector2(-190, 40), new Vector2(320, 70));
+                Place(_shopOwned[i].rectTransform, C, new Vector2(-190, -40), new Vector2(320, 60));
+            }
             var price = MakeText("p" + i, row, 42, TextAnchor.MiddleCenter, FontStyle.Bold, new Color(1f, 0.9f, 0.4f));
             price.text = PRICE[i] + " \ud83d\udc8e".Replace("\ud83d\udc8e", "permata");
             price.text = PRICE[i] + " permata";
@@ -832,6 +953,282 @@ public class KubikaItems : MonoBehaviour
     bool Hit(RectTransform rt, Vector2 sp)
         => rt != null && rt.gameObject.activeInHierarchy
            && RectTransformUtility.RectangleContainsScreenPoint(rt, sp, null);
+
+    // ============================================================
+    //  IKON & EFEK VISUAL
+    // ============================================================
+    void LoadIcons()
+    {
+        _spHammer = LoadIcon("Hammer_A");
+        _spBomb   = LoadIcon("Boom_A");
+        _spUndo   = LoadIcon("Undo_A");
+        _spGem    = LoadIcon("Gem_A");
+        _spCrown  = LoadIcon("Crown_A");
+    }
+
+    Sprite LoadIcon(string name)
+    {
+        var tex = Resources.Load<Texture2D>("KubikaIcons/" + name);
+        if (tex == null) return null;
+        return Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), C, 100f);
+    }
+
+    // ---- Sprite gelembung bulat (kaca) ----
+    Sprite BubbleSprite()
+    {
+        if (_bubbleSprite != null) return _bubbleSprite;
+        int s = 128; var tex = new Texture2D(s, s, TextureFormat.RGBA32, false);
+        tex.wrapMode = TextureWrapMode.Clamp; tex.filterMode = FilterMode.Bilinear;
+        var px = new Color32[s * s];
+        float cx = s * 0.5f, cy = s * 0.5f, R = s * 0.5f - 1f;
+        float hx = s * 0.36f, hy = s * 0.66f; // titik highlight kiri-atas
+        for (int y = 0; y < s; y++)
+            for (int x = 0; x < s; x++)
+            {
+                float dx = x + 0.5f - cx, dy = y + 0.5f - cy;
+                float d = Mathf.Sqrt(dx * dx + dy * dy);
+                float cover = Mathf.Clamp01(R - d + 0.5f);
+                float rim = Mathf.Clamp01((d - R * 0.55f) / (R * 0.45f));
+                float a = cover * Mathf.Lerp(0.14f, 0.62f, rim * rim);
+                float hd = Mathf.Sqrt((x + 0.5f - hx) * (x + 0.5f - hx) + (y + 0.5f - hy) * (y + 0.5f - hy));
+                float hi = Mathf.Clamp01(1f - hd / (s * 0.14f)) * 0.85f * cover;
+                float alpha = Mathf.Clamp01(Mathf.Max(a, hi));
+                px[y * s + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(alpha * 255f));
+            }
+        tex.SetPixels32(px); tex.Apply();
+        _bubbleSprite = Sprite.Create(tex, new Rect(0, 0, s, s), C, 100f);
+        return _bubbleSprite;
+    }
+
+    // ---- Material FX 3D (kilat & pecahan blok) ----
+    Material FxMat(Color col, float emis)
+    {
+        var sh = Shader.Find("Universal Render Pipeline/Lit");
+        if (sh == null) sh = Shader.Find("Standard");
+        var m = new Material(sh);
+        if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", col);
+        m.color = col;
+        if (m.HasProperty("_EmissionColor")) { m.EnableKeyword("_EMISSION"); m.SetColor("_EmissionColor", col * emis); }
+        return m;
+    }
+
+    // ---- Efek PALU / BOM pada blok 3D ----
+    // Palu: semua blok terdampak kilat putih bersamaan lalu pecah.
+    // Bom : blok menyala dari tengah lalu meluas; setelah semua nyala baru pecah.
+    IEnumerator BlockFx(List<(int color, Vector3 pos, Quaternion rot)> caps, bool bomb, Vector3 center)
+    {
+        if (_game == null || caps == null || caps.Count == 0) yield break;
+        Mesh mesh = _game.CellMesh;
+        Vector3 bs = new Vector3(_game.cellWidth * _game.gap, _game.cellHeight * _game.gap, _game.blockDepth);
+
+        caps.Sort((a, b) => (a.pos - center).sqrMagnitude.CompareTo((b.pos - center).sqrMagnitude));
+        float maxd = 0.01f;
+        for (int i = 0; i < caps.Count; i++) maxd = Mathf.Max(maxd, (caps[i].pos - center).magnitude);
+
+        var flashes = new List<GameObject>(caps.Count);
+        var cols = new List<Color>(caps.Count);
+        var startAt = new float[caps.Count];
+        float igniteSpread = bomb ? 0.30f : 0.04f;
+
+        for (int i = 0; i < caps.Count; i++)
+        {
+            var cap = caps[i];
+            Color bc = (_game.palette != null && cap.color >= 0 && cap.color < _game.palette.Length)
+                ? _game.palette[cap.color] : new Color(0.7f, 0.7f, 0.7f);
+            cols.Add(bc);
+            startAt[i] = bomb ? (cap.pos - center).magnitude / maxd * igniteSpread : 0f;
+
+            var go = new GameObject("KItemFx");
+            go.transform.SetParent(_game.transform, false);
+            go.transform.localPosition = cap.pos;
+            go.transform.localRotation = cap.rot;
+            go.transform.localScale = bs;
+            var mf = go.AddComponent<MeshFilter>(); mf.sharedMesh = mesh;
+            var mr = go.AddComponent<MeshRenderer>();
+            mr.material = FxMat(bc, 0.2f);
+            mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            mr.receiveShadows = false;
+            flashes.Add(go);
+        }
+
+        // Fase menyala: warna blok -> putih cahaya.
+        float ramp = 0.16f;
+        float total = igniteSpread + ramp + 0.05f;
+        float t = 0f;
+        while (t < total)
+        {
+            t += Time.deltaTime;
+            for (int i = 0; i < flashes.Count; i++)
+            {
+                var go = flashes[i]; if (go == null) continue;
+                float lt = Mathf.Clamp01((t - startAt[i]) / ramp);
+                go.transform.localScale = bs * Mathf.Lerp(1f, 1.14f, lt);
+                var m = go.GetComponent<MeshRenderer>().sharedMaterial;
+                Color cc = Color.Lerp(cols[i], Color.white, lt);
+                if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", cc);
+                m.color = cc;
+                if (m.HasProperty("_EmissionColor")) m.SetColor("_EmissionColor", cc * Mathf.Lerp(0.2f, 1.7f, lt));
+            }
+            yield return null;
+        }
+
+        // Fase pecah: kilat hilang, hamburkan pecahan warna blok.
+        for (int i = 0; i < flashes.Count; i++)
+        {
+            if (flashes[i] != null) Destroy(flashes[i]);
+            SpawnDebris(caps[i].pos, cols[i], mesh, bs);
+        }
+    }
+
+    void SpawnDebris(Vector3 localPos, Color col, Mesh mesh, Vector3 bs)
+    {
+        int n = 6;
+        for (int i = 0; i < n; i++)
+        {
+            var go = new GameObject("KItemDebris");
+            go.transform.SetParent(_game.transform, false);
+            go.transform.localPosition = localPos + Random.insideUnitSphere * 0.12f;
+            go.transform.localRotation = Random.rotation;
+            float sz = Random.Range(0.16f, 0.34f);
+            Vector3 s0 = new Vector3(bs.x * sz, bs.y * sz, bs.z * sz);
+            go.transform.localScale = s0;
+            var mf = go.AddComponent<MeshFilter>(); mf.sharedMesh = mesh;
+            var mr = go.AddComponent<MeshRenderer>();
+            mr.material = FxMat(col, 0.35f);
+            mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            mr.receiveShadows = false;
+            Vector3 dir = (go.transform.localPosition - localPos);
+            if (dir.sqrMagnitude < 0.0001f) dir = Random.onUnitSphere;
+            Vector3 vel = dir.normalized * Random.Range(1.4f, 3.4f) + Vector3.up * Random.Range(0.6f, 2.2f);
+            StartCoroutine(DebrisFx(go, vel, s0));
+        }
+    }
+
+    IEnumerator DebrisFx(GameObject go, Vector3 vel, Vector3 s0)
+    {
+        float t = 0f, dur = Random.Range(0.5f, 0.78f);
+        while (t < dur)
+        {
+            if (go == null) yield break;
+            float dt = Time.deltaTime; t += dt;
+            vel += Vector3.down * 7f * dt;
+            go.transform.localPosition += vel * dt;
+            go.transform.Rotate(240f * dt, 170f * dt, 90f * dt);
+            float k = t / dur;
+            go.transform.localScale = Vector3.Lerp(s0, s0 * 0.15f, k);
+            yield return null;
+        }
+        if (go != null) Destroy(go);
+    }
+
+    // ---- Cincin kejut (UI) untuk hadiah permata ----
+    IEnumerator GemRing(Vector2 center)
+    {
+        var img = MakeImage("gemRing", _play.transform, new Color(0.8f, 0.9f, 1f, 0.55f));
+        img.sprite = RoundSprite();
+        var rt = img.rectTransform;
+        rt.anchorMin = rt.anchorMax = rt.pivot = C;
+        rt.anchoredPosition = center;
+        rt.sizeDelta = new Vector2(120, 120);
+        float t = 0f, dur = 0.32f;
+        while (t < dur)
+        {
+            t += Time.unscaledDeltaTime;
+            float k = t / dur;
+            rt.localScale = Vector3.one * Mathf.Lerp(0.4f, 3.2f, k);
+            var c = img.color; c.a = Mathf.Lerp(0.55f, 0f, k); img.color = c;
+            yield return null;
+        }
+        Destroy(img.gameObject);
+    }
+
+    IEnumerator GemBurst(int count)
+    {
+        if (_gemLabel == null) yield break;
+        int n = Mathf.Clamp(count, 1, 8);
+        StartCoroutine(GemRing(new Vector2(0f, 180f)));
+        for (int i = 0; i < n; i++)
+        {
+            StartCoroutine(GemFly(GEM_TARGET));
+            yield return new WaitForSecondsRealtime(0.05f);
+        }
+    }
+
+    IEnumerator GemFly(Vector2 target)
+    {
+        var img = MakeImage("gemfx", _play.transform, Color.white);
+        if (_spGem != null) { img.sprite = _spGem; img.preserveAspect = true; }
+        else { img.sprite = RoundSprite(); img.color = new Color(0.62f, 0.35f, 1f); }
+        var rt = img.rectTransform;
+        rt.anchorMin = rt.anchorMax = rt.pivot = C;
+        rt.sizeDelta = new Vector2(84, 84);
+
+        Vector2 pos = new Vector2(Random.Range(-150f, 150f), Random.Range(120f, 260f));
+        rt.anchoredPosition = pos;
+
+        // Pop muncul.
+        float t = 0f;
+        while (t < 0.12f)
+        {
+            t += Time.unscaledDeltaTime;
+            rt.localScale = Vector3.one * Mathf.Lerp(0.2f, 1f, t / 0.12f);
+            yield return null;
+        }
+
+        // Jatuh ke lantai (gravitasi) + mantul.
+        float floorY = -980f + Random.Range(-30f, 30f);
+        float vy = Random.Range(40f, 160f);
+        float vx = Random.Range(-140f, 140f);
+        int bounces = 0;
+        t = 0f;
+        while (t < 1.6f)
+        {
+            float dt = Time.unscaledDeltaTime; t += dt;
+            vy -= 2600f * dt;
+            pos.x += vx * dt; pos.y += vy * dt;
+            if (pos.y <= floorY)
+            {
+                pos.y = floorY; vy = -vy * 0.42f; vx *= 0.6f; bounces++;
+                if (bounces >= 2) break;
+            }
+            rt.anchoredPosition = pos;
+            rt.localRotation = Quaternion.Euler(0f, 0f, rt.localEulerAngles.z + 240f * dt);
+            yield return null;
+        }
+        pos.y = floorY; rt.anchoredPosition = pos;
+        yield return new WaitForSecondsRealtime(0.08f);
+
+        // Terbang ke HUD permata (kiri atas).
+        Vector2 from = rt.anchoredPosition;
+        t = 0f; float d2 = 0.5f;
+        while (t < d2)
+        {
+            t += Time.unscaledDeltaTime;
+            float k = t / d2; float e = k * k * (3f - 2f * k);
+            rt.anchoredPosition = Vector2.Lerp(from, target, e);
+            rt.localScale = Vector3.one * Mathf.Lerp(1f, 0.45f, e);
+            rt.localRotation = Quaternion.identity;
+            yield return null;
+        }
+        Destroy(img.gameObject);
+        if (_gemLabel != null) StartCoroutine(PunchLabel(_gemLabel.rectTransform));
+        if (KubikaSfx.Instance != null) KubikaSfx.Instance.PlayGem();
+    }
+
+    IEnumerator PunchLabel(RectTransform rt)
+    {
+        if (rt == null) yield break;
+        float t = 0f, dur = 0.18f;
+        while (t < dur)
+        {
+            t += Time.unscaledDeltaTime;
+            float k = t / dur;
+            float s = 1f + 0.35f * Mathf.Sin(k * Mathf.PI);
+            rt.localScale = new Vector3(s, s, 1f);
+            yield return null;
+        }
+        rt.localScale = Vector3.one;
+    }
 
     // ---- Pointer abstraksi ----
     Vector2 PPos()
