@@ -13,6 +13,10 @@ using KubikaBlast;
 ///   seperti "muncul blok baru entah dari mana". Sekarang semua efek hidup di root
 ///   terpisah `_fxRoot` ("ClearFx") yang bisa dibersihkan kapan saja, dan durasinya
 ///   dipangkas jadi ~0.5 detik total.
+///
+/// JAM COMBO:
+///   BlastCore murni C# dan tidak tahu waktu Unity, jadi jendela combo 10 detik
+///   digerakkan dari sini lewat Update() -> _core.TickCombo(Time.time).
 /// </summary>
 public class BlastGame : MonoBehaviour
 {
@@ -118,6 +122,18 @@ public class BlastGame : MonoBehaviour
         Rebuild();
     }
 
+    void Update()
+    {
+        if (_core == null) return;
+
+        // Jendela combo 10 detik. SENGAJA memakai Time.time (TERSKALA), bukan
+        // Time.unscaledTime: KubikaMenu menyetel timeScale = 0 saat jeda, sehingga
+        // Time.time ikut berhenti dan membuka menu jeda TIDAK menghanguskan rantai
+        // combo yang sedang berjalan. Hit-stop cuma 0.06x selama <=0.25 detik, jadi
+        // pengaruhnya di sini bisa diabaikan.
+        _core.TickCombo(Time.time);
+    }
+
     void OnDestroy()
     {
         HitStopActive = false;
@@ -148,6 +164,10 @@ public class BlastGame : MonoBehaviour
 
         _core = new BlastCore(columns, height, numColors);
         _core.ClearBias = clearBias;
+
+        // Samakan jam combo dengan waktu sekarang supaya ronde baru tidak memulai
+        // hidup dengan jendela combo yang sudah kedaluwarsa.
+        _core.TickCombo(Time.time);
 
         BuildReel();
 
@@ -286,6 +306,10 @@ public class BlastGame : MonoBehaviour
         int levelBefore = _core.Level;
         var piece = (trayIndex >= 0 && trayIndex < _core.Tray.Length) ? _core.Tray[trayIndex] : null;
         int pieceCells = (piece != null && piece.Cells != null) ? piece.Cells.Length : 0;
+
+        // Pastikan jam combo mutakhir SEBELUM clear diselesaikan, supaya keputusan
+        // sambung-atau-putus memakai waktu penempatan ini, bukan frame sebelumnya.
+        _core.TickCombo(Time.time);
 
         bool ok = _core.PlacePiece(trayIndex, col, row);
         if (!ok) return false;
