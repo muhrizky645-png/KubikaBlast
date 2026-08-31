@@ -17,6 +17,16 @@ namespace KubikaBlast
     ///   pemain tidak pernah sama dengan angka yang membayar. Sekarang HANYA Combo di
     ///   sini yang dipakai semua sistem (skor, permata, teks, suara).
     ///
+    /// COMBO BERBASIS WAKTU (jendela 10 detik):
+    ///   Sempat dicoba combo "beruntun ketat": tiap penempatan yang TIDAK meng-clear
+    ///   langsung menolkan combo. Itu terdengar masuk akal tapi hancur di praktik —
+    ///   begitu satu cincin hancur, baris itu jadi kosong, sehingga balok berikutnya
+    ///   hampir mustahil langsung meng-clear lagi. Combo praktis tidak pernah sampai
+    ///   2, dan pemain cuma melihat "GOOD!" selamanya.
+    ///   Sekarang: clear menyambung rantai kalau datang sebelum COMBO_WINDOW habis.
+    ///   Menaruh balok tanpa clear TIDAK memutus apa pun — yang memutus hanya WAKTU.
+    ///   Jam-nya diisi dari luar lewat TickCombo() supaya file ini tetap murni C#.
+    ///
     /// EKONOMI:
     ///   - Pengali combo DIBATASI (dulu Score += base * Combo tanpa batas, jadi combo
     ///     15 = pengali 15x dan skor meledak).
@@ -42,6 +52,12 @@ namespace KubikaBlast
         /// <summary>Tambahan pengali per tingkat combo (combo 8 => 1 + 7*0.35 = 3.45x).</summary>
         public const float COMBO_STEP = 0.35f;
 
+        /// <summary>
+        /// Berapa detik rantai combo bertahan sejak clear terakhir. Clear berikutnya
+        /// harus datang sebelum ini habis kalau mau menyambung rantai.
+        /// </summary>
+        public const double COMBO_WINDOW = 10.0;
+
         public int Columns { get; private set; }
         public int Height { get; private set; }
 
@@ -62,6 +78,15 @@ namespace KubikaBlast
         public int Score;
         public int LinesCleared;
         public int Combo;
+
+        /// <summary>
+        /// Jam permainan dalam detik. Diisi dari luar lewat TickCombo() — kelas ini
+        /// sengaja tidak tahu apa-apa soal Unity.
+        /// </summary>
+        public double Clock;
+
+        /// <summary>Nilai Clock saat clear terakhir terjadi.</summary>
+        public double LastClearTime = double.NegativeInfinity;
 
         // ---- statistik untuk layar Game Over & HUD ----
         public int BestCombo;
@@ -86,6 +111,13 @@ namespace KubikaBlast
 
         /// <summary>Pengali skor dari combo saat ini. Sudah dibatasi COMBO_CAP.</summary>
         public float ComboMultiplier => MultiplierFor(Combo);
+
+        /// <summary>Sisa detik sebelum rantai combo putus. 0 kalau tidak sedang combo.</summary>
+        public double ComboTimeLeft =>
+            (Combo <= 0) ? 0.0 : Math.Max(0.0, COMBO_WINDOW - (Clock - LastClearTime));
+
+        /// <summary>Sisa jendela combo sebagai 0..1, untuk bar di HUD.</summary>
+        public float ComboFraction => (float)(ComboTimeLeft / COMBO_WINDOW);
 
         public static float MultiplierFor(int combo)
         {
@@ -127,6 +159,8 @@ namespace KubikaBlast
                     Grid[c, r] = -1;
 
             Score = 0; LinesCleared = 0; Combo = 0;
+            Clock = 0.0;
+            LastClearTime = double.NegativeInfinity;
             BestCombo = 0; PiecesPlaced = 0; CellsCleared = 0; GemsEarned = 0;
             LastClearScore = 0; LastClearGems = 0; LastPlaceScore = 0;
             LastClear = EmptyClear(false);
@@ -147,6 +181,21 @@ namespace KubikaBlast
 
         // Kolom membungkus (silinder).
         public int Wrap(int c) { c %= Columns; if (c < 0) c += Columns; return c; }
+
+        // ================= JAM COMBO =================
+
+        /// <summary>
+        /// Majukan jam permainan dan putus rantai combo kalau jendelanya sudah lewat.
+        /// Dipanggil tiap frame oleh renderer (BlastGame).
+        ///
+        /// Pakai waktu TERSKALA di sisi pemanggil, supaya membuka menu jeda tidak
+        /// menghanguskan combo yang sedang berjalan.
+        /// </summary>
+        public void TickCombo(double now)
+        {
+            Clock = now;
+            if (Combo > 0 && now - LastClearTime > COMBO_WINDOW) Combo = 0;
+        }
 
         // ================= TRAY (SMART DROP) =================
 
@@ -401,7 +450,9 @@ namespace KubikaBlast
 
             if (rings.Count == 0 && cols.Count == 0)
             {
-                Combo = 0; // tidak ada clear -> combo putus
+                // Menaruh balok tanpa clear TIDAK memutus combo. Yang memutus hanya
+                // waktu, lewat TickCombo(). Dulu di sini ada `Combo = 0;` dan itulah
+                // sebabnya rantai tidak pernah sampai 2.
                 LastClearScore = 0;
                 LastClearGems = 0;
                 LastClear = new ClearInfo
@@ -426,7 +477,12 @@ namespace KubikaBlast
             int lines = rings.Count + cols.Count;
             LinesCleared += lines;
             CellsCleared += clearedCells.Count;
-            Combo++;
+
+            // Rantai combo: sambung kalau clear ini datang sebelum jendela habis,
+            // kalau tidak mulai lagi dari 1.
+            if (Clock - LastClearTime <= COMBO_WINDOW) Combo++;
+            else Combo = 1;
+            LastClearTime = Clock;
             if (Combo > BestCombo) BestCombo = Combo;
 
             // Skor: (base per line + bonus multi-clear) x pengali combo YANG DIBATASI.
@@ -468,6 +524,9 @@ namespace KubikaBlast
         /// Dulu KubikaItems menulis `_core.Grid[cc,rr] = -1` LANGSUNG, sehingga alat
         /// tidak memberi skor, tidak memberi permata, tidak memicu clear beruntun, dan
         /// tidak pernah memeriksa ulang game over. Sekarang semua lewat sini.
+        ///
+        /// Alat sengaja TIDAK menyentuh combo maupun jendelanya: rantai combo harus
+        /// hasil bermain, bukan hasil membeli.
         /// </summary>
         public ClearInfo BlastCells(IEnumerable<(int c, int r)> cells)
         {
