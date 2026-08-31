@@ -9,19 +9,29 @@ using KubikaBlast;
 /// >>> TANPA EDIT KODE GAME & TANPA SETTING UNITY <<<
 /// Taruh file ini di folder "Assets", tekan Play.
 ///
-/// - Menyembunyikan Score/Level/Combo/"Baris hancur" bawaan BlastUI.
-/// - SCORE: angka saja + count-up per-digit + punch SEKALI tiap skor berubah
-///   (tidak lagi berkedut saat combo). Diturunkan ke posisi teks "Baris hancur".
-/// - LEVEL: punch saat naik.
-/// - COMBO: kotak sendiri = teks "COMBO xN" (pop) + BAR KUNING timer yang menyusut
-///   selama comboWindow. Selama clear berikutnya dalam comboWindow detik, streak
-///   terus naik (Good -> Awesome -> ...). Pujian muncul pop-up di tengah.
+/// DUA PERBAIKAN BESAR:
+///
+/// 1. PUJIAN SETELAH GAME OVER.
+///    DetectClear() dulu sama sekali tidak memeriksa core.GameOver. Penempatan
+///    terakhir yang meng-clear baris SEKALIGUS mematikan papan tetap memicu teks
+///    "AMAZING!!" dan suara pujian di atas layar Game Over, dan kotak COMBO
+///    bertahan sampai jendela 10 detiknya habis. Sekarang begitu core.GameOver
+///    menyala: pujian dibatalkan, suaranya tidak diputar, kotak combo langsung
+///    disembunyikan.
+///
+/// 2. SATU PENGHITUNG COMBO SAJA.
+///    Dulu ada tiga: BlastCore.Combo (membayar skor & permata), KubikaHud._streak
+///    (timer 10 detik, mengendalikan teks & tingkat pujian), dan KubikaSfx._streak
+///    (timer 15 detik, mengendalikan nada). Ketiganya bisa menunjukkan angka yang
+///    berbeda pada saat yang sama. Sekarang semuanya membaca BlastCore.Combo.
+///    Bar kuning tidak lagi menghitung mundur waktu tak-terlihat; ia menunjukkan
+///    seberapa dekat combo ke pengali maksimum.
 /// </summary>
 public class KubikaHud : MonoBehaviour
 {
     public static KubikaHud Instance { get; private set; }
 
-    [Tooltip("Berapa detik jeda maksimum antar-clear agar combo/pujian terus naik.")]
+    [Tooltip("Tidak lagi dipakai untuk combo (combo kini milik BlastCore). Disimpan demi kompatibilitas scene lama.")]
     [Range(1f, 30f)] public float comboWindow = 10f;
 
     BlastGame _game;
@@ -33,12 +43,10 @@ public class KubikaHud : MonoBehaviour
     Vector2 _praiseBase;
     float _comboBarWidth = 560f;
 
-    float _scoreDisplay, _scorePulse, _comboPop, _levelPulse, _praiseT;
+    float _scoreDisplay, _comboPop, _levelPulse, _praiseT;
     int _lastLines, _shownCombo = -1, _shownLevel = -1, _lastScoreTarget;
     bool _praiseActive;
-
-    int _streak;
-    float _lastClearTime = -999f;
+    bool _wasGameOver;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void AutoBootstrap()
@@ -72,17 +80,33 @@ public class KubikaHud : MonoBehaviour
             _lastLines = core.LinesCleared;
             _shownCombo = -1;
             _shownLevel = core.Level;
-            _streak = 0;
-            _lastClearTime = -999f;
-            _praiseActive = false;
-            SetAlpha(_praise, 0f);
+            _wasGameOver = false;
+            CancelPraise();
             if (_comboBox != null) _comboBox.gameObject.SetActive(false);
         }
+
+        // ---- GAME OVER: bungkam semuanya, SEBELUM apa pun sempat tampil. ----
+        if (core.GameOver)
+        {
+            if (!_wasGameOver)
+            {
+                _wasGameOver = true;
+                CancelPraise();
+                if (_comboBox != null) _comboBox.gameObject.SetActive(false);
+                _shownCombo = -1;
+            }
+            // Skor tetap berjalan naik supaya angka akhirnya benar, tapi tanpa pujian.
+            AnimateScore(core);
+            AnimateLevel(core);
+            _lastLines = core.LinesCleared;
+            return;
+        }
+        _wasGameOver = false;
 
         AnimateScore(core);
         AnimateLevel(core);
         DetectClear(core);
-        AnimateCombo();
+        AnimateCombo(core);
         AnimatePraise();
     }
 
@@ -90,27 +114,20 @@ public class KubikaHud : MonoBehaviour
     {
         int target = core.Score;
 
-        // Punch HANYA sekali saat skor benar-benar berubah (bukan tiap frame),
-        // supaya tidak berkedut selama count-up combo.
-        if (target != _lastScoreTarget)
-        {
-            if (target > _lastScoreTarget) _scorePulse = 1f;
-            _lastScoreTarget = target;
-        }
+        if (target != _lastScoreTarget) _lastScoreTarget = target;
 
         if (target < Mathf.RoundToInt(_scoreDisplay)) _scoreDisplay = target;
         if (_scoreDisplay < target)
         {
             float diff = target - _scoreDisplay;
-            float step = Mathf.Max(diff * Time.deltaTime * 6f, 60f * Time.deltaTime);
+            float dt = Time.unscaledDeltaTime;
+            float step = Mathf.Max(diff * dt * 6f, 60f * dt);
             _scoreDisplay = Mathf.Min(target, _scoreDisplay + step);
         }
         _score.text = Mathf.RoundToInt(_scoreDisplay).ToString();
 
-        // Skor dibuat STABIL: tanpa punch skala sama sekali, supaya angka tidak
-        // bergetar/berkedut saat skor naik beruntun selama combo. Count-up tetap
-        // jalan (angka bergulir naik halus), hanya efek skala yang dihilangkan.
-        _scorePulse = 0f;
+        // Skor sengaja STABIL: count-up bergulir, tanpa punch skala, supaya angka
+        // tidak bergetar saat skor naik beruntun selama combo.
         _scoreRT.localScale = Vector3.one;
     }
 
@@ -122,7 +139,7 @@ public class KubikaHud : MonoBehaviour
             _shownLevel = core.Level;
         }
         _level.text = "LEVEL " + core.Level;
-        _levelPulse = Mathf.MoveTowards(_levelPulse, 0f, Time.deltaTime * 3f);
+        _levelPulse = Mathf.MoveTowards(_levelPulse, 0f, Time.unscaledDeltaTime * 3f);
         _levelRT.localScale = Vector3.one * (1f + 0.22f * _levelPulse);
     }
 
@@ -130,60 +147,77 @@ public class KubikaHud : MonoBehaviour
     {
         if (core.LinesCleared > _lastLines)
         {
-            if (Time.time - _lastClearTime <= comboWindow) _streak++;
-            else _streak = 1;
-            _lastClearTime = Time.time;
-            ShowPraise(_streak);
+            // Tingkat pujian = combo ASLI dari BlastCore, angka yang sama yang
+            // membayar skor & permata. Tidak ada lagi penghitung bayangan.
+            ShowPraise(core.Combo);
         }
         _lastLines = core.LinesCleared;
     }
 
-    void AnimateCombo()
+    void AnimateCombo(BlastCore core)
     {
         if (_comboBox == null) return;
 
-        if (_streak > 0 && Time.time - _lastClearTime > comboWindow) _streak = 0;
-
-        bool show = _streak >= 2;
+        int combo = core.Combo;
+        bool show = combo >= 2;
         if (_comboBox.gameObject.activeSelf != show) _comboBox.gameObject.SetActive(show);
-        if (!show) { _shownCombo = _streak; return; }
+        if (!show) { _shownCombo = combo; return; }
 
-        if (_streak != _shownCombo)
+        if (combo != _shownCombo)
         {
-            _comboText.text = "COMBO x" + _streak;
+            float mult = BlastCore.MultiplierFor(combo);
+            _comboText.text = "COMBO x" + combo + "   " + mult.ToString("0.0") + "x";
             _comboPop = 1f;
-            _shownCombo = _streak;
+            _shownCombo = combo;
         }
 
-        // Bar kuning timer: menyusut dari penuh -> kosong selama comboWindow.
-        float remain = Mathf.Clamp01(1f - (Time.time - _lastClearTime) / Mathf.Max(0.01f, comboWindow));
+        // Bar kuning = seberapa dekat ke pengali maksimum (bukan timer tak-terlihat).
+        float fillFrac = Mathf.Clamp01((float)combo / BlastCore.COMBO_CAP);
         var sd = _comboFill.sizeDelta;
-        sd.x = _comboBarWidth * remain;
+        sd.x = _comboBarWidth * fillFrac;
         _comboFill.sizeDelta = sd;
 
-        _comboPop = Mathf.MoveTowards(_comboPop, 0f, Time.deltaTime * 3f);
+        // Bar berubah warna saat pengali mentok — hadiah visual kecil.
+        var fillImg = _comboFill.GetComponent<Image>();
+        if (fillImg != null)
+            fillImg.color = combo >= BlastCore.COMBO_CAP
+                ? new Color(1f, 0.45f, 0.75f)
+                : new Color(1f, 0.82f, 0.15f);
+
+        _comboPop = Mathf.MoveTowards(_comboPop, 0f, Time.unscaledDeltaTime * 3f);
         float s = 1f + 0.5f * _comboPop;
         _comboBox.localScale = new Vector3(s, s, 1f);
     }
 
     void ShowPraise(int tier)
     {
+        // Penjaga terakhir: jangan pernah memuji papan yang sudah mati.
+        if (_game != null && _game.Core != null && _game.Core.GameOver) return;
+
         _praise.text = PraiseFor(tier);
         _praise.color = PraiseColor(tier);
-        if (KubikaSfx.Instance != null) KubikaSfx.Instance.PlayPraise(tier); // suara = tier SAMA dgn teks -> selalu sinkron
+        if (KubikaSfx.Instance != null) KubikaSfx.Instance.PlayPraise(tier);
         _praiseActive = true;
         _praiseT = 0f;
         _praiseRT.anchoredPosition = _praiseBase;
         _praiseRT.localScale = Vector3.one * 0.4f;
     }
 
+    void CancelPraise()
+    {
+        _praiseActive = false;
+        _praiseT = 0f;
+        SetAlpha(_praise, 0f);
+        if (_praiseRT != null) _praiseRT.localScale = Vector3.one;
+    }
+
     void AnimatePraise()
     {
         if (!_praiseActive) return;
-        _praiseT += Time.deltaTime;
+        _praiseT += Time.unscaledDeltaTime;
         const float dur = 0.95f;
         float k = _praiseT / dur;
-        if (k >= 1f) { _praiseActive = false; SetAlpha(_praise, 0f); _praiseRT.localScale = Vector3.one; return; }
+        if (k >= 1f) { CancelPraise(); return; }
 
         float s = k < 0.16f ? Mathf.Lerp(0.4f, 1.18f, k / 0.16f)
                 : k < 0.28f ? Mathf.Lerp(1.18f, 1f, (k - 0.16f) / 0.12f)
@@ -277,13 +311,12 @@ public class KubikaHud : MonoBehaviour
         _comboBox.sizeDelta = new Vector2(720f, 150f);
         _comboBox.anchoredPosition = new Vector2(0f, -360f);
 
-        // Teks COMBO xN
         var tGO = new GameObject("Txt", typeof(RectTransform));
         tGO.transform.SetParent(_comboBox, false);
         _comboText = tGO.AddComponent<Text>();
         _comboText.font = font;
         _comboText.fontStyle = FontStyle.Bold;
-        _comboText.fontSize = 72;
+        _comboText.fontSize = 64;
         _comboText.alignment = TextAnchor.UpperCenter;
         _comboText.horizontalOverflow = HorizontalWrapMode.Overflow;
         _comboText.verticalOverflow = VerticalWrapMode.Overflow;
@@ -296,7 +329,6 @@ public class KubikaHud : MonoBehaviour
         trt.anchoredPosition = Vector2.zero;
         AddFx(tGO);
 
-        // Latar bar
         var bgGO = new GameObject("Bar", typeof(RectTransform));
         bgGO.transform.SetParent(_comboBox, false);
         var bg = bgGO.AddComponent<Image>();
@@ -308,7 +340,6 @@ public class KubikaHud : MonoBehaviour
         brt.sizeDelta = new Vector2(_comboBarWidth, 26f);
         brt.anchoredPosition = new Vector2(0f, -98f);
 
-        // Isi bar (kuning), nempel kiri, menyusut dari kanan
         var fGO = new GameObject("Fill", typeof(RectTransform));
         fGO.transform.SetParent(bgGO.transform, false);
         var fill = fGO.AddComponent<Image>();

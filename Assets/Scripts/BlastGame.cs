@@ -5,6 +5,14 @@ using KubikaBlast;
 
 /// <summary>
 /// Render TABUNG 3D gaya gulungan kabel + kubus dari BlastCore.
+///
+/// PERBAIKAN PENTING (blok hantu):
+///   Dulu kubus efek ("Fx") di-parent ke `transform`, sementara RenderGrid() hanya
+///   membersihkan anak-anak `_blocksRoot`. Jadi selama ~1.1 detik setelah clear ada
+///   kubus sekarat yang MASIH TERLIHAT di papan padahal Grid sudah kosong — persis
+///   seperti "muncul blok baru entah dari mana". Sekarang semua efek hidup di root
+///   terpisah `_fxRoot` ("ClearFx") yang bisa dibersihkan kapan saja, dan durasinya
+///   dipangkas jadi ~0.5 detik total.
 /// </summary>
 public class BlastGame : MonoBehaviour
 {
@@ -34,22 +42,25 @@ public class BlastGame : MonoBehaviour
 
     [Header("Efek clear")]
     public bool enableClearFx = true;
-    public float clearFxDuration = 0.4f;
-    public float clearStepDelay = 0.06f;
+    // Dipangkas dari 0.4 -> 0.3 dan 0.06 -> 0.02. Dulu 24 sel x 0.06 = 1.44 detik
+    // rentetan, jadi kubus sekarat menumpuk di papan dan suaranya saling tabrakan.
+    public float clearFxDuration = 0.3f;
+    public float clearStepDelay = 0.02f;
+
+    [Header("Efek hadiah (menghargai pemain)")]
+    public bool enableShockwave = true;
+    public bool enableCameraShake = true;
+    [Range(0f, 1f)] public float shakeStrength = 0.5f;
+    [Range(0f, 0.5f)] public float blockEmission = 0.14f;
 
     [Header("Debug")]
     public bool demoFill = false;
 
     [Header("Bayangan (shadow)")]
-    // Matikan cast & receive shadow di semua blok/drum/flange/axle.
     public bool disableShadows = true;
-    // Matikan juga shadow di semua Light pada scene (mis. Directional Light).
     public bool disableSceneLightShadows = true;
 
     [Header("Kecerdasan potongan (smart drop)")]
-    // 0 = potongan benar-benar ACAK (asal muat di papan).
-    // Makin tinggi = makin sering sengaja memberi potongan yang bisa langsung meng-clear.
-    // Turunkan (mis. 0.15) kalau mau terasa lebih acak; naikkan kalau mau lebih sering clear.
     [Range(0f, 1f)] public float clearBias = 0.35f;
 
     [Header("Blok default saat mulai (starting fill)")]
@@ -63,36 +74,81 @@ public class BlastGame : MonoBehaviour
     float _radius;
     BlastCore _core;
     Transform _blocksRoot;
+    Transform _fxRoot;
     Mesh _mesh;
     Material[] _mats;
     bool _cameraFramed;
+
+    // Semua material yang KAMI buat, supaya bisa dihancurkan saat Rebuild.
+    // Dulu tiap Rebuild membocorkan satu set penuh (palet + drum + 2 flange + axle).
+    readonly List<Material> _ownedMats = new List<Material>();
+
+    // Getaran kamera.
+    float _shake;
+    Vector3 _camBase;
+    bool _camBaseSet;
+
+    /// <summary>
+    /// True selagi jeda dramatis (hit-stop) berlangsung. KubikaMenu memeriksa ini
+    /// sebelum memaksa Time.timeScale kembali ke 1.
+    /// </summary>
+    public static bool HitStopActive { get; private set; }
 
     // ===== Hook publik untuk BlastInput =====
     public BlastCore Core => _core;
     public float Radius => _radius;
     public Mesh CellMesh => _mesh;
 
+    // ===== Event (menggantikan tebak-tebakan lewat selisih skor) =====
+    /// <summary>Potongan berhasil ditaruh. Argumen = jumlah sel potongan.</summary>
+    public event System.Action<int> OnPlaced;
+    /// <summary>Ada sel yang hancur (dari penempatan ATAU dari alat).</summary>
+    public event System.Action<BlastCore.ClearInfo> OnCleared;
+    /// <summary>Level naik. Argumen = level baru.</summary>
+    public event System.Action<int> OnLevelUp;
+    /// <summary>Papan buntu. Dipanggil TEPAT SEKALI per ronde.</summary>
+    public event System.Action OnGameOver;
+    /// <summary>Papan dibangun ulang (ronde baru).</summary>
+    public event System.Action OnRebuilt;
+
+    bool _gameOverFired;
+
     void Start()
     {
         Rebuild();
     }
 
+    void OnDestroy()
+    {
+        HitStopActive = false;
+        CleanupOwnedMaterials();
+    }
+
     [ContextMenu("Rebuild Tabung")]
     public void Rebuild()
     {
+        // Hentikan SEMUA animasi ronde sebelumnya sebelum apa pun dihancurkan.
+        StopAllCoroutines();
+        HitStopActive = false;
+        _shake = 0f;
+        _gameOverFired = false;
+
+        CleanupOwnedMaterials();
+
         for (int i = transform.childCount - 1; i >= 0; i--)
-        {
-            var ch = transform.GetChild(i).gameObject;
-            if (Application.isPlaying) Destroy(ch);
-            else DestroyImmediate(ch);
-        }
+            Kill(transform.GetChild(i).gameObject);
 
         _radius = columns * cellWidth / (2f * Mathf.PI);
-        _core = new BlastCore(columns, height, numColors);
-        _core.ClearBias = clearBias;
         _mesh = RoundedCube.Shared();
 
+        // Palet dibangun DULU supaya numColors bisa dijepit ke jumlah warna nyata.
+        // Dulu numColors bisa melebihi panjang palette dan meminta warna yang tak ada.
         BuildPalette();
+        numColors = Mathf.Clamp(numColors, 1, Mathf.Max(1, palette.Length));
+
+        _core = new BlastCore(columns, height, numColors);
+        _core.ClearBias = clearBias;
+
         BuildReel();
 
         if (autoCamera && !_cameraFramed) { SetupCamera(); _cameraFramed = true; }
@@ -101,10 +157,27 @@ public class BlastGame : MonoBehaviour
 
         if (demoFill) DemoFill();
         else if (startWithBlocks) StartingFill();
+
         // SMART DROP: setelah papan terisi, carve ulang tray dari CELAH NYATA di papan
         // supaya tiap potongan dijamin punya slot pas (solusi tersembunyi).
         _core.RegenerateTray();
         RenderGrid();
+
+        OnRebuilt?.Invoke();
+    }
+
+    void Kill(Object o)
+    {
+        if (o == null) return;
+        if (Application.isPlaying) Destroy(o);
+        else DestroyImmediate(o);
+    }
+
+    void CleanupOwnedMaterials()
+    {
+        for (int i = 0; i < _ownedMats.Count; i++) Kill(_ownedMats[i]);
+        _ownedMats.Clear();
+        _mats = null;
     }
 
     [ContextMenu("Frame Camera (auto-fit sekali)")]
@@ -164,6 +237,11 @@ public class BlastGame : MonoBehaviour
         var root = new GameObject("Blocks").transform;
         root.SetParent(transform, false);
         _blocksRoot = root;
+
+        // Root TERPISAH untuk efek. Ini yang mencegah kubus sekarat disangka blok asli.
+        var fx = new GameObject("ClearFx").transform;
+        fx.SetParent(transform, false);
+        _fxRoot = fx;
     }
 
     void CreateDisc(string name, Transform parent, float y, float discRadius)
@@ -178,12 +256,10 @@ public class BlastGame : MonoBehaviour
 
     public void RenderGrid()
     {
+        if (_blocksRoot == null || _core == null) return;
+
         for (int i = _blocksRoot.childCount - 1; i >= 0; i--)
-        {
-            var ch = _blocksRoot.GetChild(i).gameObject;
-            if (Application.isPlaying) Destroy(ch);
-            else DestroyImmediate(ch);
-        }
+            Kill(_blocksRoot.GetChild(i).gameObject);
 
         for (int r = 0; r < height; r++)
             for (int c = 0; c < columns; c++)
@@ -194,16 +270,77 @@ public class BlastGame : MonoBehaviour
             }
     }
 
+    /// <summary>Buang semua efek yang sedang berjalan (dipakai saat game over / restart).</summary>
+    public void ClearFx()
+    {
+        StopAllCoroutines();
+        if (_fxRoot == null) return;
+        for (int i = _fxRoot.childCount - 1; i >= 0; i--)
+            Kill(_fxRoot.GetChild(i).gameObject);
+    }
+
     public bool TryPlace(int trayIndex, int col, int row)
     {
-        if (_core == null) return false;
+        if (_core == null || _core.GameOver) return false;
+
+        int levelBefore = _core.Level;
+        var piece = (trayIndex >= 0 && trayIndex < _core.Tray.Length) ? _core.Tray[trayIndex] : null;
+        int pieceCells = (piece != null && piece.Cells != null) ? piece.Cells.Length : 0;
+
         bool ok = _core.PlacePiece(trayIndex, col, row);
-        if (ok)
+        if (!ok) return false;
+
+        RenderGrid();
+        OnPlaced?.Invoke(pieceCells);
+
+        var clear = _core.LastClear;
+        int clearedCells = (clear.Cells != null) ? clear.Cells.Count : 0;
+        if (clearedCells > 0)
         {
-            if (enableClearFx) SpawnClearEffect(_core.LastClear);
-            RenderGrid();
+            if (enableClearFx) SpawnClearEffect(clear);
+            ApplyImpact(clear);
+            OnCleared?.Invoke(clear);
         }
-        return ok;
+
+        if (_core.Level > levelBefore && !_core.GameOver) OnLevelUp?.Invoke(_core.Level);
+
+        if (_core.GameOver && !_gameOverFired)
+        {
+            _gameOverFired = true;
+            OnGameOver?.Invoke();
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Hancurkan sel dari alat (Palu / Bom) LEWAT BlastCore, bukan dengan menulis
+    /// Grid langsung. Dengan begitu alat ikut memberi skor, memunculkan efek, dan
+    /// memeriksa ulang game over kalau ruang yang dibuka menyelamatkan pemain.
+    /// </summary>
+    public BlastCore.ClearInfo BlastCells(IEnumerable<(int c, int r)> cells)
+    {
+        if (_core == null) return default;
+
+        var info = _core.BlastCells(cells);
+        if (info.Cells != null && info.Cells.Count > 0)
+        {
+            if (enableClearFx) SpawnClearEffect(info);
+            ApplyImpact(info);
+        }
+        RenderGrid();
+
+        if (info.Cells != null && info.Cells.Count > 0) OnCleared?.Invoke(info);
+
+        if (_core.GameOver && !_gameOverFired)
+        {
+            _gameOverFired = true;
+            OnGameOver?.Invoke();
+        }
+        else if (!_core.GameOver)
+        {
+            _gameOverFired = false; // alat menyelamatkan papan
+        }
+        return info;
     }
 
     void SpawnBlock(int c, int r, int color)
@@ -221,9 +358,150 @@ public class BlastGame : MonoBehaviour
         if (disableShadows) DisableShadows(mr);
     }
 
+    // ==================================================================
+    // ============ EFEK CLEAR ==========================================
+    // ==================================================================
+
+    void ApplyImpact(BlastCore.ClearInfo clear)
+    {
+        int lines = 0;
+        if (clear.Rings != null) lines += clear.Rings.Count;
+        if (clear.Cols != null) lines += clear.Cols.Count;
+
+        if (enableShockwave && lines > 0) SpawnShockwaves(clear);
+
+        if (enableCameraShake)
+        {
+            int cells = (clear.Cells != null) ? clear.Cells.Count : 0;
+            float mag = Mathf.Clamp01(cells / 40f) * 0.6f + Mathf.Clamp01(lines / 4f) * 0.4f;
+            float comboBoost = 1f + Mathf.Clamp01((clear.Combo - 1) / 6f) * 0.8f;
+            Shake(mag * comboBoost * shakeStrength);
+        }
+    }
+
+    /// <summary>Tambah getaran kamera. Selalu mengambil nilai TERBESAR, tidak menumpuk.</summary>
+    public void Shake(float amount)
+    {
+        if (amount > _shake) _shake = Mathf.Min(1.2f, amount);
+    }
+
+    void LateUpdate()
+    {
+        if (!enableCameraShake) return;
+        var cam = Camera.main;
+        if (cam == null) return;
+
+        if (!_camBaseSet) { _camBase = cam.transform.position; _camBaseSet = true; }
+
+        if (_shake > 0.0005f)
+        {
+            _shake = Mathf.MoveTowards(_shake, 0f, Time.unscaledDeltaTime * 2.6f);
+            Vector3 off = Random.insideUnitSphere * (_shake * 0.22f);
+            off.z *= 0.35f;
+            cam.transform.position = _camBase + off;
+        }
+        else if (cam.transform.position != _camBase)
+        {
+            cam.transform.position = _camBase;
+        }
+    }
+
+    void SpawnShockwaves(BlastCore.ClearInfo clear)
+    {
+        if (!Application.isPlaying || _fxRoot == null) return;
+
+        Color glow = new Color(1f, 0.94f, 0.65f);
+        if (clear.Combo >= 5) glow = new Color(1f, 0.72f, 0.35f);
+        if (clear.Combo >= 7) glow = new Color(1f, 0.55f, 0.75f);
+
+        if (clear.Rings != null)
+            foreach (int r in clear.Rings) SpawnRingShock(r, glow);
+
+        // Kolom vertikal: satu kilatan tinggi di posisi kolom itu.
+        if (clear.Cols != null)
+            foreach (int c in clear.Cols) SpawnColumnShock(c, glow);
+    }
+
+    void SpawnRingShock(int row, Color glow)
+    {
+        var go = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        go.name = "ShockRing";
+        var col = go.GetComponent<Collider>();
+        if (col != null) Kill(col);
+        go.transform.SetParent(_fxRoot, false);
+        go.transform.localPosition = new Vector3(0f, row * cellHeight + cellHeight * 0.5f, 0f);
+
+        var mr = go.GetComponent<MeshRenderer>();
+        var mat = MakeGlowMaterial(glow);
+        mr.material = mat;
+        DisableShadows(mr);
+
+        StartCoroutine(AnimateShock(go, mat, _radius * 1.02f, _radius * 2.1f, cellHeight * 0.16f));
+    }
+
+    void SpawnColumnShock(int c, Color glow)
+    {
+        var go = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        go.name = "ShockCol";
+        var col = go.GetComponent<Collider>();
+        if (col != null) Kill(col);
+        go.transform.SetParent(_fxRoot, false);
+
+        float totalH = height * cellHeight;
+        Vector3 dir = CellToWorld(c, 0).normalized;
+        go.transform.localPosition = dir * (_radius * 1.15f) + new Vector3(0f, totalH * 0.5f, 0f);
+        go.transform.localScale = new Vector3(cellWidth * 0.5f, totalH * 0.5f, cellWidth * 0.5f);
+
+        var mr = go.GetComponent<MeshRenderer>();
+        var mat = MakeGlowMaterial(glow);
+        mr.material = mat;
+        DisableShadows(mr);
+
+        StartCoroutine(AnimateColumnShock(go, mat));
+    }
+
+    IEnumerator AnimateShock(GameObject go, Material mat, float r0, float r1, float thickness)
+    {
+        const float dur = 0.42f;
+        float t = 0f;
+        while (t < dur)
+        {
+            if (go == null) { Kill(mat); yield break; }
+            float k = t / dur;
+            float ease = 1f - (1f - k) * (1f - k);         // ease-out
+            float rad = Mathf.Lerp(r0, r1, ease);
+            go.transform.localScale = new Vector3(rad * 2f, thickness, rad * 2f);
+            SetGlowAlpha(mat, Mathf.Lerp(0.55f, 0f, k));
+            t += Time.unscaledDeltaTime;
+            yield return null;
+        }
+        Kill(go);
+        Kill(mat);
+    }
+
+    IEnumerator AnimateColumnShock(GameObject go, Material mat)
+    {
+        const float dur = 0.38f;
+        float t = 0f;
+        Vector3 s0 = go.transform.localScale;
+        while (t < dur)
+        {
+            if (go == null) { Kill(mat); yield break; }
+            float k = t / dur;
+            float w = Mathf.Lerp(1f, 2.6f, k);
+            go.transform.localScale = new Vector3(s0.x * w, s0.y, s0.z * w);
+            SetGlowAlpha(mat, Mathf.Lerp(0.5f, 0f, k));
+            t += Time.unscaledDeltaTime;
+            yield return null;
+        }
+        Kill(go);
+        Kill(mat);
+    }
+
     void SpawnClearEffect(BlastCore.ClearInfo clear)
     {
         if (!Application.isPlaying) return;
+        if (_fxRoot == null) return;
         if (clear.Cells == null || clear.Cells.Count == 0) return;
 
         int n = clear.Cells.Count;
@@ -242,13 +520,13 @@ public class BlastGame : MonoBehaviour
         order.Sort((x, y) => rr[x] != rr[y] ? rr[x].CompareTo(rr[y]) : cc[x].CompareTo(cc[y]));
 
         var gos = new List<GameObject>(n);
-        var mrs = new List<MeshRenderer>(n);
         var mats = new List<Material>(n);
         for (int k = 0; k < order.Count; k++)
         {
             int i = order[k];
             var go = new GameObject("Fx");
-            go.transform.SetParent(transform, false);
+            // >>> root TERPISAH: tidak akan pernah tertukar dengan blok asli. <<<
+            go.transform.SetParent(_fxRoot, false);
             go.transform.localPosition = CellToWorld(cc[i], rr[i]);
             go.transform.localRotation = CellRotation(cc[i]);
             go.transform.localScale = new Vector3(cellWidth * gap, cellHeight * gap, blockDepth);
@@ -258,48 +536,60 @@ public class BlastGame : MonoBehaviour
             var mr = go.AddComponent<MeshRenderer>();
             Color baseC = (palette != null && colr[i] >= 0 && colr[i] < palette.Length)
                           ? palette[colr[i]] : Color.white;
-            mr.material = MakeFxMaterial(baseC);
+            var mat = MakeFxMaterial(baseC);
+            mr.material = mat;
             if (disableShadows) DisableShadows(mr);
 
-            gos.Add(go); mrs.Add(mr); mats.Add(mr.material);
+            gos.Add(go); mats.Add(mat);
         }
 
-        StartCoroutine(ClearSequence(gos, mrs, mats));
+        StartCoroutine(ClearSequence(gos, mats));
     }
 
-    IEnumerator ClearSequence(List<GameObject> gos, List<MeshRenderer> mrs, List<Material> mats)
+    IEnumerator ClearSequence(List<GameObject> gos, List<Material> mats)
     {
         float delay = Mathf.Max(0f, clearStepDelay);
         for (int k = 0; k < gos.Count; k++)
         {
-            if (gos[k] != null) StartCoroutine(AnimateFx(gos[k], mrs[k], mats[k]));
-            if (delay > 0f) yield return new WaitForSeconds(delay);
+            if (gos[k] != null) StartCoroutine(AnimateFx(gos[k], mats[k]));
+            if (delay > 0f) yield return new WaitForSecondsRealtime(delay);
         }
     }
 
-    IEnumerator AnimateFx(GameObject go, MeshRenderer mr, Material mat)
+    IEnumerator AnimateFx(GameObject go, Material mat)
     {
         float dur = Mathf.Max(0.05f, clearFxDuration);
         float t = 0f;
         Vector3 s0 = go.transform.localScale;
-        Vector3 s1 = s0 * 1.7f;
+        Vector3 s1 = s0 * 1.85f;
         Vector3 startPos = go.transform.localPosition;
         Vector3 outward = go.transform.localRotation * Vector3.forward;
+        Vector3 spin = new Vector3(Random.Range(-160f, 160f), Random.Range(-160f, 160f), Random.Range(-160f, 160f));
         Color c0 = mat.HasProperty("_BaseColor") ? mat.GetColor("_BaseColor") : mat.color;
 
         while (t < dur)
         {
-            if (go == null) yield break;
+            if (go == null) { Kill(mat); yield break; }
             float k = t / dur;
-            go.transform.localScale = Vector3.Lerp(s0, s1, k);
-            go.transform.localPosition = startPos + outward * (k * 0.6f);
-            Color cc = c0; cc.a = Mathf.Lerp(0.95f, 0f, k);
+
+            // Sedikit "pop" dulu sebelum mengembang & memudar — terasa pecah, bukan meleleh.
+            float pop = k < 0.14f ? Mathf.Lerp(1f, 1.22f, k / 0.14f) : 1f;
+            go.transform.localScale = Vector3.Lerp(s0, s1, k) * pop;
+            go.transform.localPosition = startPos + outward * (k * 0.75f) + Vector3.up * (k * k * 0.35f);
+            go.transform.Rotate(spin * Time.unscaledDeltaTime, Space.Self);
+
+            Color cc = c0;
+            cc.a = Mathf.Lerp(0.95f, 0f, k * k);
             if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", cc);
+            if (mat.HasProperty("_EmissionColor"))
+                mat.SetColor("_EmissionColor", c0 * Mathf.Lerp(2.2f, 0f, k));
             mat.color = cc;
-            t += Time.deltaTime;
+
+            t += Time.unscaledDeltaTime;
             yield return null;
         }
-        if (go != null) Destroy(go);
+        Kill(go);
+        Kill(mat);
     }
 
     Material MakeFxMaterial(Color col)
@@ -319,10 +609,70 @@ public class BlastGame : MonoBehaviour
 
         Color c = col; c.a = 0.95f;
         if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", c);
-        if (m.HasProperty("_EmissionColor")) { m.EnableKeyword("_EMISSION"); m.SetColor("_EmissionColor", col * 0.6f); }
+        if (m.HasProperty("_EmissionColor")) { m.EnableKeyword("_EMISSION"); m.SetColor("_EmissionColor", col * 2.2f); }
         m.color = c;
         return m;
     }
+
+    // Material aditif untuk gelombang kejut. TIDAK didaftarkan ke _ownedMats karena
+    // umurnya pendek dan dihancurkan sendiri di akhir koroutin.
+    Material MakeGlowMaterial(Color col)
+    {
+        var shader = Shader.Find("Universal Render Pipeline/Unlit");
+        if (shader == null) shader = Shader.Find("Unlit/Color");
+        if (shader == null) shader = Shader.Find("Sprites/Default");
+        var m = new Material(shader);
+
+        if (m.HasProperty("_Surface")) m.SetFloat("_Surface", 1f);
+        m.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+        m.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.One); // aditif
+        m.SetInt("_ZWrite", 0);
+        m.DisableKeyword("_SURFACE_TYPE_OPAQUE");
+        m.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+        m.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent + 10;
+
+        Color c = col; c.a = 0.55f;
+        if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", c);
+        m.color = c;
+        return m;
+    }
+
+    static void SetGlowAlpha(Material m, float a)
+    {
+        if (m == null) return;
+        if (m.HasProperty("_BaseColor"))
+        {
+            var c = m.GetColor("_BaseColor"); c.a = a; m.SetColor("_BaseColor", c);
+        }
+        var mc = m.color; mc.a = a; m.color = mc;
+    }
+
+    // ==================================================================
+    // ============ HIT-STOP ============================================
+    // ==================================================================
+
+    /// <summary>Jeda dramatis singkat. Aman dipanggil berkali-kali.</summary>
+    public void HitStop(float seconds, float scale = 0.08f)
+    {
+        if (!Application.isPlaying) return;
+        if (HitStopActive) return;
+        StartCoroutine(HitStopRoutine(Mathf.Clamp(seconds, 0.01f, 0.25f), Mathf.Clamp01(scale)));
+    }
+
+    IEnumerator HitStopRoutine(float seconds, float scale)
+    {
+        HitStopActive = true;
+        float prev = Time.timeScale;
+        Time.timeScale = scale;
+        yield return new WaitForSecondsRealtime(seconds);
+        // Jangan timpa kalau sementara itu ada menu yang sengaja mem-pause game.
+        if (Mathf.Approximately(Time.timeScale, scale)) Time.timeScale = Mathf.Approximately(prev, 0f) ? 1f : prev;
+        HitStopActive = false;
+    }
+
+    // ==================================================================
+    // ============ KAMERA & MATERIAL ===================================
+    // ==================================================================
 
     void SetupCamera()
     {
@@ -351,6 +701,10 @@ public class BlastGame : MonoBehaviour
         Vector3 offset = new Vector3(0f, Mathf.Sin(rad) * dist, -Mathf.Cos(rad) * dist);
         cam.transform.position = target + offset;
         cam.transform.LookAt(target);
+
+        // Titik acuan getaran harus ikut diperbarui.
+        _camBase = cam.transform.position;
+        _camBaseSet = true;
     }
 
     void BuildPalette()
@@ -374,7 +728,18 @@ public class BlastGame : MonoBehaviour
             var m = new Material(shader);
             if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", palette[i]);
             m.color = palette[i];
+
+            // Sedikit emisi supaya papan tidak terasa datar. Dulu HANYA kubus SEKARAT
+            // yang punya emisi, jadi blok hidup justru terlihat lebih kusam.
+            if (blockEmission > 0f && m.HasProperty("_EmissionColor"))
+            {
+                m.EnableKeyword("_EMISSION");
+                m.SetColor("_EmissionColor", palette[i] * blockEmission);
+            }
+            if (m.HasProperty("_Smoothness")) m.SetFloat("_Smoothness", 0.42f);
+
             _mats[i] = m;
+            _ownedMats.Add(m);
         }
     }
 
@@ -385,15 +750,13 @@ public class BlastGame : MonoBehaviour
         var m = new Material(shader);
         if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", col);
         m.color = col;
+        _ownedMats.Add(m);
+
         var rend = go.GetComponent<MeshRenderer>();
         rend.sharedMaterial = m;
         if (disableShadows) DisableShadows(rend);
         var cc = go.GetComponent<Collider>();
-        if (cc != null)
-        {
-            if (Application.isPlaying) Destroy(cc);
-            else DestroyImmediate(cc);
-        }
+        if (cc != null) Kill(cc);
     }
 
     // ===== BAYANGAN (SHADOW) =====
@@ -414,6 +777,10 @@ public class BlastGame : MonoBehaviour
 #endif
         foreach (var l in lights) if (l != null) l.shadows = LightShadows.None;
     }
+
+    // ==================================================================
+    // ============ ISI PAPAN AWAL ======================================
+    // ==================================================================
 
     void DemoFill()
     {
@@ -475,6 +842,7 @@ public class BlastGame : MonoBehaviour
         if (pattern == 6) FillClusters(rng);
         else if (pattern == 3) FillDiagonalPairs(rng);
 
+        // Anti auto-clear: jangan pernah mulai dengan baris/kolom yang sudah penuh.
         for (int r = 0; r < height; r++)
         {
             bool full = true;
@@ -488,6 +856,7 @@ public class BlastGame : MonoBehaviour
             if (full) _core.Grid[c, rng.Next(height)] = -1;
         }
 
+        // Anti mati-instan: buka sel sampai ada potongan tray yang muat.
         int guard = 0;
         int maxSteps = columns * height + 1;
         while (!AnyTrayFits() && guard++ < maxSteps)
