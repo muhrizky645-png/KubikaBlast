@@ -35,6 +35,7 @@ public class BlastTest : MonoBehaviour
         TestBlockedCell();
         TestWrapPiece();
         TestScoringRules();
+        TestComboWindow();
         TestToolBlast();
         TestShapePools();
 
@@ -126,7 +127,59 @@ public class BlastTest : MonoBehaviour
         Check("LINES_PER_LEVEL masuk akal", BlastCore.LINES_PER_LEVEL > 0);
     }
 
-    // --- Tes 6: Palu/Bom lewat BlastCells ---
+    // --- Tes 6: jendela combo 10 detik ---
+    // Ini aturan yang dulu diam-diam salah: combo lama diputus oleh PENEMPATAN,
+    // bukan oleh WAKTU, sehingga rantai praktis tidak pernah sampai 2 dan pemain
+    // cuma pernah melihat "GOOD!". Ketiga aturan di bawah mengunci perilaku baru.
+    void TestComboWindow()
+    {
+        Check("COMBO_WINDOW positif", BlastCore.COMBO_WINDOW > 0);
+
+        var core = new BlastCore(columns: 6, height: 6, numColors: 4, seed: 42);
+
+        core.TickCombo(0.0);
+        ForceRingClear(core, 0);
+        Check("Clear pertama -> combo 1", core.Combo == 1);
+
+        // Aturan 1: clear berikutnya di DALAM jendela menyambung rantai.
+        core.TickCombo(BlastCore.COMBO_WINDOW - 1.0);
+        ForceRingClear(core, 0);
+        Check("Clear kedua di dalam jendela -> combo 2", core.Combo == 2);
+
+        // Aturan 2: menaruh balok TANPA clear tidak boleh memutus rantai.
+        core.Tray[0] = new BlastCore.Piece
+        {
+            Cells = new (int, int)[] { (0, 0) },
+            Color = 3,
+            Used = false
+        };
+        core.PlacePiece(0, 2, 3);
+        Check("Taruh tanpa clear TIDAK memutus combo", core.Combo == 2);
+
+        // Aturan 3: hanya WAKTU yang memutus rantai.
+        core.TickCombo(core.LastClearTime + BlastCore.COMBO_WINDOW + 1.0);
+        Check("Jendela habis -> combo balik nol", core.Combo == 0);
+
+        ForceRingClear(core, 0);
+        Check("Clear setelah jendela habis -> mulai lagi dari 1", core.Combo == 1);
+    }
+
+    // Isi baris `row` sampai tersisa satu lubang di kolom 0, lalu tutup lubang itu
+    // supaya cincinnya pasti ke-clear.
+    void ForceRingClear(BlastCore core, int row)
+    {
+        for (int c = 0; c < core.Columns; c++) core.Grid[c, row] = 1;
+        core.Grid[0, row] = -1;
+        core.Tray[0] = new BlastCore.Piece
+        {
+            Cells = new (int, int)[] { (0, 0) },
+            Color = 2,
+            Used = false
+        };
+        core.PlacePiece(0, 0, row);
+    }
+
+    // --- Tes 7: Palu/Bom lewat BlastCells ---
     void TestToolBlast()
     {
         var core = new BlastCore(columns: 6, height: 6, numColors: 4, seed: 7);
@@ -142,7 +195,7 @@ public class BlastTest : MonoBehaviour
         Check("BlastCells TIDAK menaikkan combo", core.Combo == comboBefore);
     }
 
-    // --- Tes 7: bentuk 3x3 berat tidak pernah masuk pool ---
+    // --- Tes 8: bentuk 3x3 berat tidak pernah masuk pool ---
     void TestShapePools()
     {
         bool heavyFound = false;
