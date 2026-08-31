@@ -1,190 +1,341 @@
-# Kubika Blast — HANDOFF / Ringkasan Project
+# KUBIKA BLAST - HANDOFF
 
-> File ini adalah **titik lanjut (handoff)** untuk sesi chat/AI berikutnya. Baca ini dulu
-> supaya langsung paham konsep, status, arsitektur kode, dan langkah selanjutnya
-> tanpa mengulang dari nol.
->
-> Terakhir diperbarui: **28 Agustus 2026** (setelah Tahap 4 UI + Tahap 5 efek clear,
-> polesan kamera "flat", starting fill pola acak, & blok melayang melengkung — semua sudah di-push ke GitHub).
+Dokumen serah-terima untuk siapa pun (manusia atau AI) yang melanjutkan proyek ini.
+Baca sampai habis sebelum menyentuh kode.
 
 ---
 
-## 1. Apa ini?
+## 1. Identitas proyek
 
-**Kubika Blast** = game puzzle baru, gabungan:
-- **Kubika Tower** (game asli developer, repo `Tetris3D`, Unity) — papan **silinder 3D** yang kolomnya membungkus (wrap).
-- **Block Blast** — gameplay taruh potongan (drag & drop) dari **tray 3 potongan**, tanpa gravity.
+| | |
+|---|---|
+| Engine | **Unity 6**, URP |
+| Bahasa | C# |
+| Repo | `muhrizky645-png/KubikaBlast` (branch `main`) |
+| Scene | `Assets/Scenes/SampleScene.unity` |
+| Target | Mobile (portrait), referensi UI `1080 x 2400` |
+| Bahasa UI | **Inggris** (semua teks yang dilihat pemain) |
+| Bahasa komentar kode | **Indonesia** |
 
-Dibuat sebagai **project & repo terpisah** dari Kubika Tower.
-
-### Engine & lingkungan
-- **Unity 6** (bukan Godot — rencana Godot dibatalkan). Bahasa **C#**.
-- Render pipeline: **URP** (Universal Render Pipeline).
-- Scene: pakai ulang **SampleScene** bawaan (ada Main Camera, Directional Light, Global Volume).
-- Input: mendukung **Input System baru** & **Input Manager lama** (auto lewat `#if`).
-- Target akhir: mobile (APK/AdMob), integrasi modul **SALDOKU/TOKO/Currency** seperti Kubika Tower (belum dikerjakan).
-
----
-
-## 2. Aturan main (game design)
-
-| Aspek | Kubika Blast |
-| --- | --- |
-| Papan | Silinder 3D, kolom membungkus keliling (wrap). Default kode: 12 kolom × 10 baris (developer sempat pakai 16×8 di Inspector). |
-| Balok | **Diam** (tidak jatuh / no gravity). Pemain menaruh manual. |
-| Kontrol | **Seret potongan dari tray** (drag-from-tray ala Block Blast di HP). |
-| Rotasi | **Hanya TABUNG/papan yang bisa diputar** (swipe/drag/Q-E/panah/2 jari). **Potongan TIDAK bisa diputar**. |
-| Clear | Baris **cincin penuh** (satu ring keliling) ATAU **kolom penuh** (vertikal) → hilang. **Tanpa gravity**. |
-| Skor | Per sel terisi = 10 (CELL_POINTS), per garis clear = 100 (CLEAR_POINTS), bonus multi-clear × combo. |
-| Game over | Tidak ada satu pun dari 3 potongan tray yang muat di papan. |
-| Mulai game | Papan sudah terisi **pola blok default acak** (starting fill) yang berubah tiap main. |
-
-### Visual: tabung gaya "gulungan kabel" (cable reel)
-- **Drum** = spool bagian dalam; dibuat **mepet ke sisi dalam blok**, disisakan celah `drumGap`.
-- **2 flange** = piringan/tutup atas & bawah (radius sedikit lebih besar dari blok), digeser keluar setengah tebalnya agar tak memotong blok baris ujung.
-- **Axle** = poros tengah opsional.
-- **Blok** menempel di cincin (rim), menghadap keluar.
-- **Kamera** "flat" ala Block Blast (lihat bagian kamera di bawah).
+> Ada repo kosong `muhrizky645-png/kubikablast3d` yang tak terpakai (boleh dihapus).
+> Jangan tertukar - repo yang benar namanya **KubikaBlast**, tanpa `3d`.
 
 ---
 
-## 3. Arsitektur kode (folder `Assets/Scripts/`)
+## 2. Konsep permainan
 
-Semua kelas logika ada di namespace **`KubikaBlast`**.
+Balok-balok ditaruh pada permukaan **silinder** (tabung) yang bisa diputar.
 
-### `Shapes.cs`
-- `Shapes.All` = **12 bentuk** potongan sebagai offset sel `(int x, int y)[]`.
+- Papan berukuran `columns = 12` (melingkar penuh) x `height = 10`.
+- Kolom **menyambung** kiri-kanan: kolom 11 bertetangga dengan kolom 0. Semua
+  aritmetika kolom WAJIB lewat `BlastCore.Wrap(c)`.
+- **Clear** terjadi kalau sebuah **ring** (baris melingkar penuh) atau sebuah
+  **kolom** penuh terisi.
 
-### `BlastCore.cs` — logika inti (murni C#, tanpa Unity/rendering)
-- Konstruktor: `BlastCore(columns, height, numColors = 5, seed?)`
-- `Grid[c, r]` : `int` — `-1` = kosong, `>=0` = index warna.
-- `Wrap(c)` : kolom membungkus.
-- `Piece { (int x,int y)[] Cells; int Color; bool Used }` — **public**.
-- `Tray[3]` : 3 potongan siap taruh (**public**).
-- `CanPlace(piece, col, row)` / `CanPlaceAnywhere(piece)` — **public**.
-- `PlacePiece(trayIndex, col, row)` → taruh + `ResolveClears()` + refill tray + `CheckGameOver()`.
-- `ResolveClears()` → hapus ring/kolom penuh; hasil di `LastClear { Rings, Cols, Cells }` (Cells simpan warna asli utk efek).
-- Properti: `Score`, `Combo`, `LinesCleared`, `GameOver`, `Columns`, `Height`.
-- `Reset(columns,height)` (dipakai konstruktor) mengisi grid -1 & refill tray.
+### Aturan desain yang TIDAK BOLEH dilanggar
 
-### `BlastTest.cs` — test logika (MonoBehaviour). Status: tes lolos.
-
-### `RoundedCube.cs` — mesh kubus membulat (port dari `Tetris3D.RoundedBlock`).
-- `RoundedCube.Shared()` → Mesh kubus satuan (cache). Bukan prefab.
-
-### `BlastGame.cs` — render tabung 3D + starting fill (MonoBehaviour)
-Ditempel ke GameObject `Game`. Membangun tabung + spawn kubus dari `BlastCore.Grid`.
-- `CellToWorld(c, r)`: koordinat **LOKAL** (relatif transform). `_radius = columns*cellWidth/(2π)`.
-- `CellRotation(c)` (**public**): kubus menghadap keluar.
-- **Hook publik:** `Core`, `Radius`, `CellMesh`, `TryPlace(trayIndex, col, row)` (taruh + efek clear + render ulang).
-- `Rebuild()` — `[ContextMenu("Rebuild Tabung")]`; juga dipakai sebagai **Restart** oleh BlastUI. **Kamera hanya di-frame SEKALI** (`_cameraFramed`) supaya tak reset tiap Rebuild.
-- `FrameCameraNow()` — `[ContextMenu]` paksa atur ulang kamera.
-- **Efek clear (Tahap 5)** — `SpawnClearEffect` + coroutine `ClearSequence`/`AnimateFx`: kubus Fx hancur **berurutan satu-per-satu** (baris bawah→atas, kiri→kanan) dg jeda `clearStepDelay`.
-- **Starting fill** — `StartingFill()` dipanggil di `Rebuild()` (kalau `startWithBlocks` & bukan `demoFill`). Lihat bagian 3a.
-- `demoFill` (default **false**) — debug DemoFill lama; kalau ON menimpa starting fill.
-
-#### 3a. Starting fill — POLA acak flat (ala Block Blast)
-- Blok default **tersebar rata di seluruh tabung** (bukan menumpuk dari bawah).
-- Tiap mulai/Restart pilih **1 dari 7 pola** acak (`rng.Next(7)`): 0 scatter, 1 garis vertikal, 2 pita horizontal, 3 **pasangan 2 blok serong ke atas** (domino diagonal, via `FillDiagonalPairs`), 4 diagonal melingkar, 5 gelombang sinus, 6 cluster/gumpalan (via `FillClusters`).
-- **Pola catur DIHAPUS** — dulu bikin semua sel kosong terisolasi → langsung game over.
-- **2 pengaman:** (1) tak ada cincin/kolom **penuh** (biar tak auto-clear saat mulai); (2) **anti langsung-mati** — pastikan minimal satu potongan tray muat (`AnyTrayFits()`); kalau tidak, kosongkan sel acak sampai ada ruang.
-- `startSeed = 0` → pola **berubah tiap main**; selain 0 → pola **tetap** (reproducible).
-
-### `BlastInput.cs` — input, drag-drop, blok melayang, preview-clear (MonoBehaviour)
-Tempel di GameObject `Game` yang SAMA (`[RequireComponent(typeof(BlastGame))]`, `[DefaultExecutionOrder(1000)]` supaya jalan setelah BlastGame.Start).
-- **Model seret-dari-tray (HP):** gestur WAJIB dimulai di slot tray (`BlastUI.TraySlotAtPointer`), lalu seret ke tabung. Menekan/menyeret langsung di tabung TIDAK menaruh apa pun.
-- **Raycast matematis** kamera → silinder `x²+z²=R²` (ruang lokal, jadi rotasi tabung terhitung) → `(col,row)`. Tanpa collider.
-- **Indikator sel tujuan (ghost):** highlight tipis "membungkus" sel, HANYA saat posisi PAS; dipusatkan di bawah jari (anchor = sel jari − centroid potongan).
-- **Preview CLEAR:** sel yang AKAN hancur ikut menyala (`PredictClears`), ala Block Blast.
-- **Blok melayang (2 mode)** — `SetHeldPiece()`:
-  - (A) **MELENGKUNG di tabung** saat terkunci ke ghost (`RenderHeldCurved`): tiap kubus dipetakan ke permukaan silinder pakai `CellToWorld` + `CellRotation` (persis seperti ghost), lalu diangkat **radial keluar** sejauh `heldGhostLiftCells` → lengkungnya **sinkron dg bayangan** di angle/zoom apa pun. Pakai `transform.TransformPoint` → ikut rotasi tabung.
-  - (B) **Overlay layar rata** (`RenderHeldFlatOverlay`): fallback saat belum ada sel tujuan valid — mengikuti jari, menghadap kamera, seukuran blok asli (`matchBlockSize`).
-- **Taruh:** lepas jari di sel valid → `BlastGame.TryPlace()`. Lepas di luar/di atas UI (`BlastUI.PointerBlocksPlacement`) = batal.
-- **Pilih tray:** tombol `1/2/3`, `TAB`, atau tap slot tray. API `SelectTray(i)`, `ResetSelection()`, `CurrentIndex`.
-- **Putar TABUNG:** drag klik-kanan, Q/E, panah, atau 2 jari (`keyRotateSpeed`, `dragRotateSpeed`).
-
-### `BlastUI.cs` — UI (Tahap 4) (MonoBehaviour)
-- Tray 3 potongan, panel skor/combo/lines, layar game over + tombol Restart (→ `BlastGame.Rebuild()`).
-- Menyediakan **static helper** yang dipakai BlastInput: `TraySlotAtPointer(pos)` (slot tray di bawah pointer, -1 kalau bukan) & `PointerBlocksPlacement(pos)` (true kalau pointer di atas UI → batalkan penempatan).
+1. Ini **Unity**, bukan Godot.
+2. **Balok tidak bisa diputar.** Yang berputar hanya silindernya.
+3. **Tidak ada gravitasi.** Balok diam di tempat balok itu ditaruh.
+4. Clear = **ring penuh** ATAU **kolom penuh**. Tidak ada match-3.
+5. Menaruh balok **hanya** dengan cara men-drag dari tray. Tidak ada tap-to-place.
+6. `RoundedCube.cs` membangun mesh secara prosedural. **Bukan prefab.**
+7. Kamera dibingkai **sekali saja** (`_cameraFramed`), tidak tiap frame.
+8. Raycast papan adalah **matematis** (ray vs silinder). **Tanpa collider.**
+9. Isi awal papan tidak boleh papan catur, dan wajib menjaga penjaga
+   anti-auto-clear serta anti-mati-seketika.
 
 ---
 
-## 3b. Parameter Inspector (semua `public`)
+## 3. Peta file (14 skrip, semua di `Assets/Scripts/`)
 
-### BlastGame
-- **Ukuran papan:** `columns` (12), `height` (10), `numColors` (5)
-- **Dimensi:** `cellWidth` (1), `cellHeight` (1), `blockDepth` (0.6), `gap` (0.92)
-- **Flange:** `flangeMargin` (0.4), `flangeThickness` (0.3), `drumGap` (0.08), `showAxle` (true)
-- **Kamera (auto-fit, di-frame SEKALI):** `autoCamera` (true), `cameraFov` (35 — kecil = flat), `cameraZoomOut` (1.25), `cameraTilt` (6°), `cameraAimHeight` (0.45)
-- **Efek clear:** `enableClearFx` (true), `clearFxDuration` (0.4), `clearStepDelay` (0.06)
-- **Debug:** `demoFill` (false)
-- **Blok default saat mulai:** `startWithBlocks` (true), `startFillChance` (0.45), `startRandomColors` (true), `startSeed` (0)
-- **`palette`** (array warna kubus)
+| File | Peran |
+|---|---|
+| `BlastCore.cs` | **Otak permainan.** Murni logika, tanpa Unity API. Grid, tray, skor, combo, level, permata, game over. |
+| `Shapes.cs` | Kamus bentuk balok + kolam bentuk per level. |
+| `BlastGame.cs` | Jembatan logika -> dunia 3D. Membangun silinder, render balok, efek clear, getar kamera, hit-stop, **event**. |
+| `BlastInput.cs` | Drag balok dari tray, hantu penempatan, pratinjau clear, putar silinder. |
+| `BlastUI.cs` | HUD dalam permainan (skor, combo, baris, level) + tray. |
+| `KubikaHud.cs` | Kotak combo besar + kata pujian (GOOD! ... LEGENDARY!). |
+| `KubikaMenu.cs` | Home, Jeda, Pengaturan, **Game Over**, papan peringkat. |
+| `KubikaItems.cs` | Permata, item (Hammer/Bomb/Undo), bubble, iklan simulasi, toko. |
+| `KubikaSfx.cs` | Semua suara & musik, dibangkitkan secara prosedural (tanpa file audio). |
+| `BlastBackground.cs` | Gradien latar per level + gelembung latar. |
+| `KubikaPerf.cs` | Satu-satunya pemilik `Application.targetFrameRate`. |
+| `RoundedCube.cs` | Mesh kubus bersudut tumpul, dibuat sekali lalu dipakai bersama. |
+| `BlastTest.cs` | Uji logika `BlastCore`. **Editor saja**, tidak jalan otomatis. |
+| `KubikaTapPlace.cs` | **SUDAH DIMATIKAN.** Lihat bagian 6. |
 
-### BlastInput
-- **Putar:** `keyRotateSpeed` (90), `dragRotateSpeed` (0.3)
-- **Ghost/drag:** `ghostOnlyWhileDragging` (true), `dragThreshold` (12)
-- **Indikator tujuan:** `ghostHighlightColor`
-- **Preview clear:** `enableClearPreview` (true), `clearPreviewColor`
-- **Blok melayang:** `enableHeldPiece` (true), `heldGhostLiftCells` (0.6 — tinggi angkat radial saat melengkung), `heldScreenYOffset` (90), `matchBlockSize` (true), `heldSizeMultiplier` (1), `heldPixelSize` (90), `heldDepth` (2) — empat terakhir hanya untuk mode fallback overlay.
+### Namespace
 
----
+Hanya `BlastCore`, `Shapes`, dan `RoundedCube` yang berada di
+`namespace KubikaBlast`. Semua MonoBehaviour bersifat global dan memakai
+`using KubikaBlast;`.
 
-## 4. Status progres
+### Execution order
 
-- ✅ **Konsep** — lengkap.
-- ✅ **Tahap 1 — Logika inti** (`BlastCore.cs`, `Shapes.cs`, `BlastTest.cs`). Tes lolos.
-- ✅ **Tahap 2 — Render tabung 3D statis** (`RoundedCube.cs`, `BlastGame.cs`).
-- ✅ **Tahap 3 — Input & drag-drop** (`BlastInput.cs`). Model seret-dari-tray, raycast, ghost.
-- ✅ **Tahap 4 — UI** (`BlastUI.cs`). Tray, skor/combo, game over + restart.
-- ✅ **Tahap 5 — Efek clear berurutan** (kubus hancur satu-per-satu + preview clear).
-- ✅ **Polesan kamera** — auto-fit "flat" (FOV kecil + zoom-out + tilt + aim height), di-frame sekali.
-- ✅ **Starting fill** — pola blok default acak yang berubah tiap main, dg pengaman anti auto-clear & anti langsung-mati.
-- ✅ **Blok melayang melengkung** — sinkron dengan bayangan saat terkunci ke ghost.
-- ✅ **Push ke GitHub** — seluruh project ada di repo ini (private, branch `main`).
-- ⏳ **Berikutnya (Tahap 6)** — audio/SFX, polish juice (skor pop, screenshake), build APK, integrasi SALDOKU/TOKO/Currency, AdMob. Belum.
+- `BlastInput` = `[DefaultExecutionOrder(1000)]` (paling akhir).
+- Semua yang lain = 0.
 
----
+Urutan ini **penting**: `KubikaItems` harus jalan sebelum `BlastInput` supaya
+bisa memotret papan SEBELUM langkah pemain, untuk fitur Undo.
 
-## 5. Ide / langkah berikutnya (belum dikerjakan)
+### Bootstrap otomatis (tanpa setting di Editor)
 
-1. **Audio & SFX** — suara taruh blok, clear, combo, game over.
-2. **Juice visual** — animasi skor bertambah, efek combo, screenshake ringan saat multi-clear.
-3. **Kurva kesulitan** — atur variasi/kepadatan starting fill atau distribusi bentuk tray seiring skor.
-4. **Build mobile** — APK, uji sentuh di HP, orientasi portrait.
-5. **Ekonomi game** — SALDOKU/TOKO/Currency + AdMob (mengikuti Kubika Tower).
+| Skrip | Kapan |
+|---|---|
+| `KubikaSfx`, `KubikaPerf` | `BeforeSceneLoad` + `DontDestroyOnLoad` |
+| `KubikaHud`, `KubikaMenu`, `KubikaItems`, `BlastBackground` | `AfterSceneLoad` |
 
 ---
 
-## 6. Referensi
+## 4. Ekonomi: skor, level, combo, permata
 
-### GitHub
-- Repo ini: `muhrizky645-png/KubikaBlast` (private, Unity 6, branch `main`).
-- File di `Assets/Scripts/`: `Shapes.cs`, `BlastCore.cs`, `BlastTest.cs`, `RoundedCube.cs`, `BlastGame.cs`, `BlastInput.cs`, `BlastUI.cs`.
-- Repo Kubika Tower asli (sumber `RoundedBlock`): `muhrizky645-png/Tetris3D`.
-- Ada repo kosong `muhrizky645-png/kubikablast3d` yang tak terpakai (boleh dihapus).
+Semua rumus tinggal di `BlastCore`. **Jangan menghitung ulang di tempat lain.**
 
-### Notion (dokumen desain — milik developer)
-- Halaman konsep: "Konsep Game: Kubika Blast (Kubika Tower × Block Blast)" + subhalaman tahap.
+```csharp
+public const int LINES_PER_LEVEL = 12;
+public const int COMBO_CAP       = 8;
+public const float COMBO_STEP    = 0.35f;
 
-### Alur kerja git (GitHub Desktop)
-- Perubahan via AI dibuat **langsung di GitHub** (branch `main`) → **Pull origin** dulu di GitHub Desktop sebelum lanjut ngoding lokal.
-- Setelah edit lokal: **Changes** → Summary → **Commit to main** → **Push origin**.
-- `.gitignore` Unity aktif (`Library/`, `Temp/`, dll tak ikut).
+public int Level          => Math.Max(1, LinesCleared / LINES_PER_LEVEL + 1);
+public int LinesIntoLevel => LinesCleared % LINES_PER_LEVEL;
+
+public static float MultiplierFor(int combo);   // 1 + 0.35*(min(combo,8)-1) -> maks 3.45x
+public static int   GemsFor(int lines, int combo);
+```
+
+- **Level dari BARIS, bukan skor.** Dulu level naik tiap 1000 poin, jadi begitu
+  pengali combo membesar, level ikut meroket dan bentuk sulit datang terlalu
+  cepat. Sekarang naik tiap 12 baris, apa pun skornya.
+- **Combo dibatasi 8.** Tanpa batas, satu rentetan bagus bisa membuat skor
+  meledak dan angka di HUD jadi tak berarti.
+- **Permata**: `GemsFor(1,1) = 3`, `GemsFor(3,5) = 13`. Bertambah karena jumlah
+  baris DAN karena combo, jadi clear 4 baris tidak lagi dibayar sama dengan
+  clear 1 baris.
+
+Statistik yang tersedia untuk layar Game Over: `BestCombo`, `PiecesPlaced`,
+`CellsCleared`, `GemsEarned`, `LinesCleared`.
+
+### Harga item (`KubikaItems.PRICE`)
+
+| Item | Harga |
+|---|---|
+| Hammer | 120 |
+| Bomb | 260 |
+| Undo | 180 |
+
+Harga lama (200/600/400) membuat sebuah bom setara ~200 baris: praktis tak
+pernah terbeli.
 
 ---
 
-## 7. Keputusan penting & koreksi (jangan diulang salah)
+## 5. Event: cara sistem lain ikut bereaksi
 
-- **Unity, BUKAN Godot.**
-- **Potongan tidak bisa diputar; hanya tabung yang diputar.**
-- **Tanpa gravity** — blok tersisa tidak jatuh saat ada clear.
-- **Clear** = **ring penuh** ATAU **kolom penuh**.
-- **Menaruh HANYA lewat seret dari tray** — menekan tabung langsung tidak menaruh.
-- **RoundedBlock = mesh prosedural** (`RoundedCube.cs`), bukan prefab.
-- **Visual gulungan kabel:** drum mepet sisi dalam blok (`drumGap`) + flange (tutup) lebih besar; blok di cincin.
-- **Kamera di-frame SEKALI** (`_cameraFramed`); perubahan transform saat Play mode hilang saat Stop — atur di Edit mode. FOV kecil = tampilan flat.
-- **Blok/ghost/blok-melayang-melengkung pakai koordinat/transform tabung** (localPosition/localRotation atau TransformPoint), bukan world murni — supaya ikut berputar & lengkungnya sinkron.
-- **Raycast tabung dihitung matematis** (ray vs silinder), bukan physics collider — collider primitive sengaja dibuang di `Paint()`.
-- **Starting fill**: JANGAN pakai pola papan catur (isolasi sel → instant game over). Selalu jaga pengaman anti auto-clear & anti langsung-mati.
-- **Edit file via GitHub API butuh kirim SELURUH isi file** (tak ada patch parsial) + `sha` blob terbaru.
+`BlastGame` menyiarkan lima event. **Pakai ini**, jangan memantau nilai tiap
+frame (polling).
+
+```csharp
+public event Action<int>                 OnPlaced;    // jumlah sel yang ditaruh
+public event Action<BlastCore.ClearInfo> OnCleared;
+public event Action<int>                 OnLevelUp;
+public event Action                      OnGameOver;  // dijamin sekali saja
+public event Action                      OnRebuilt;   // papan baru / restart
+```
+
+`ClearInfo` membawa `Rings`, `Cols`, `Cells`, `Combo`, `Score`, `Gems`, dan
+**`FromTool`**.
+
+> **`FromTool` itu penting.** Clear yang berasal dari Hammer/Bomb ditandai
+> `FromTool = true`. `KubikaSfx` memakainya untuk melewati suara cascade, dan
+> `KubikaItems` memakainya untuk **tidak** membayar permata - kalau dibayar,
+> membeli palu bisa menghasilkan permata lebih banyak daripada harganya.
+
+Aturan: setiap yang `+=` sebuah event WAJIB `-=` di `OnDestroy`, dan wajib
+punya penjaga supaya tidak berlangganan dua kali (`_hookedGame`).
+
+---
+
+## 6. `KubikaTapPlace.cs` sudah dimatikan - jangan dihidupkan
+
+File ini dulu adalah sistem tap-to-place kedua dengan algoritma pencariannya
+sendiri (menyapu seluruh papan, tanpa magnet), berjalan di order 0 sehingga
+**mendahului** `BlastInput` di order 1000. Keduanya bisa menaruh balok dari tap
+yang sama, di tempat yang berbeda.
+
+Itulah penyebab **"blok hancur, lalu muncul blok baru entah dari mana"**.
+
+Sekarang isinya hanya `void Awake() { enabled = false; }` dan bootstrap-nya
+sudah dicabut. Menaruh balok **hanya** lewat drag di `BlastInput` (lihat aturan
+desain nomor 5).
+
+---
+
+## 7. Kepemilikan tunggal - jangan ada dua tuan
+
+Sebagian besar bug di ronde ini lahir dari dua sistem yang memperebutkan satu
+hal. Daftar berikut adalah pemilik sahnya.
+
+| Yang diperebutkan | Pemilik sah | Cara pakai dari tempat lain |
+|---|---|---|
+| Posisi kamera (getar) | `BlastGame` (`_camBase` + `LateUpdate`) | `_game.Shake(amount)` |
+| `Time.timeScale` saat hit-stop | `BlastGame` | `_game.HitStop(detik, skala)` |
+| `Time.timeScale` saat menu | `KubikaMenu.SetState` | - |
+| `Application.targetFrameRate` | `KubikaPerf` | `KubikaPerf.SetFps(n)` |
+| Layar Game Over | `KubikaMenu` | - |
+| Rumus skor/level/permata | `BlastCore` | `MultiplierFor` / `GemsFor` |
+
+Catatan penting:
+
+- **Hit-stop dan menu.** `KubikaMenu` punya jaring pengaman yang mengembalikan
+  `Time.timeScale` ke 1. Jaring itu hanya tahu harus mengalah untuk
+  `BlastGame.HitStopActive`. Kalau ada kode lain yang menyetel `timeScale`
+  sendiri, jaring pengaman akan langsung membatalkannya.
+- **FPS** disimpan di PlayerPrefs `kubika_fps`; `KubikaMenu` menulis kunci yang
+  sama. PlayerPrefs adalah sumber kebenarannya.
+- **Layar Game Over.** Dulu ada DUA layar bertumpuk: satu di `BlastUI`
+  (sortingOrder 100) dan satu di `KubikaMenu` (300). Yang tersembunyi tetap
+  jalan tiap frame dan tombolnya duduk persis di bawah tombol yang terlihat.
+  Yang di `BlastUI` sudah dihapus seluruhnya.
+
+---
+
+## 8. Audio - satu AudioSource untuk satu peran
+
+`KubikaSfx` membangkitkan semua suara secara prosedural. Tidak ada berkas audio.
+
+**Aturan emas:** peran yang mengubah `pitch` TIDAK BOLEH berbagi `AudioSource`
+dengan peran yang suaranya panjang.
+
+Sebabnya: `AudioSource.pitch` berlaku untuk **semua** suara yang sedang
+berbunyi di source itu, bukan hanya yang berikutnya. Dulu semua percikan clear
+memakai satu source bersama dan menyetel ulang `pitch` sebelum tiap
+`PlayOneShot`, sehingga nada yang masih berbunyi ikut berubah di tengah jalan.
+Itulah **"suaranya kayak nabrak"**.
+
+Tujuh source berdedikasi:
+
+| Source | Peran |
+|---|---|
+| `_sfx` | umum |
+| `_cascadeSrc` | percikan clear - **`pitch` tidak pernah disentuh** |
+| `_gemSrc` | tik permata |
+| `_toolSrc` | palu & bom |
+| `_melodic` | naik level |
+| `_voiceSrc` | suara pujian |
+| `_music` | musik latar |
+
+Pengaman lain:
+
+- Hanya boleh ada **satu** coroutine cascade (`StopCascade()` sebelum memulai).
+- Maksimal `MAX_CASCADE_NOTES = 10` nada, dimampatkan ke `CASCADE_TOTAL = 0.26f`
+  detik, dengan pembatas kenyaringan `1/sqrt(n)`.
+- Saat game over: `_muted` menyala, semua suara diredam 0.12 detik, lalu sting
+  game over berbunyi **sendirian**.
+
+### Pujian setelah kalah
+
+Dulu ketika langkah terakhir menghasilkan clear DAN sekaligus game over, kata
+pujian ("AWESOME!!") tetap muncul di atas layar kalah. Sekarang `KubikaHud`
+memeriksa cabang game over lebih dulu dan memanggil `CancelPraise()`, dan
+`KubikaSfx` membisukan diri. Kalau menambah perayaan baru, **cek game over
+lebih dulu.**
+
+---
+
+## 9. Layar Game Over
+
+Ada di `KubikaMenu`. Terungkap bertahap, semua memakai waktu tak terskala:
+
+judul -> kalimat motivasi -> skor dihitung naik -> rekor -> statistik -> tombol.
+
+Mengetuk di mana saja yang bukan tombol akan **melewati** animasi.
+
+Kalimat motivasi dipilih berdasarkan hasil main, dari empat kolam
+`static readonly string[]` di bagian atas kelas:
+
+| Kolam | Kapan dipakai |
+|---|---|
+| `MotivationRecord` | rekor baru |
+| `MotivationStrong` | `ratio >= 0.75` atau `>= 30` baris |
+| `MotivationSolid` | `ratio >= 0.35` atau `>= 12` baris |
+| `MotivationShort` | selain itu |
+
+`ratio = Score / rekor sebelumnya`. Untuk mengubah kalimatnya, sunting keempat
+array itu - tidak ada tempat lain yang perlu disentuh.
+
+---
+
+## 10. Ranjau yang mudah terinjak
+
+- **`KubikaHud` mencari teks HUD lewat REFLEKSI, berdasarkan nama field privat**
+  di `BlastUI`: `_scoreText`, `_levelText`, `_comboText`, `_linesText`.
+  **Mengganti nama field itu akan mematikan HUD tanpa error kompilasi.**
+- **Efek clear harus hidup di `"ClearFx"`,** bukan langsung di bawah
+  `BlastGame.transform`. Dulu kubus efek bersarang di sana, lalu `RenderGrid`
+  menghitungnya sebagai balok - hantu di papan.
+- **Material yang dibuat saat runtime wajib dilepas.** `BlastGame` melacaknya di
+  `_ownedMats` dan membersihkannya di `OnDestroy`.
+- **Alat wajib lewat `BlastCore.BlastCells`,** jangan menulis `Grid[c,r] = -1`
+  sendiri. Menulis langsung melewatkan `RecheckGameOver()`, sehingga sebuah alat
+  bisa membebaskan papan tapi permainan tetap merasa buntu. Hal yang sama
+  berlaku setelah Undo.
+- **Bentuk berat tidak boleh masuk kolam acak.** Solid 3x3 (9 sel) dan ring 3x3
+  (8 sel) hidup di `Base3Heavy` / `Tier3Heavy` dan tidak pernah diundi.
+  `BlastTest` menjaga aturan ini.
+- **Animasi UI memakai `Time.unscaledDeltaTime`.** Saat menu terbuka
+  `timeScale = 0`, jadi `Time.deltaTime` bernilai nol dan animasi membeku.
+
+---
+
+## 11. Menjalankan uji logika
+
+`BlastTest` **tidak** jalan otomatis (dulu jalan tiap `Start`, ikut terbawa ke
+build). Cara memakainya:
+
+1. Pasang komponen `BlastTest` pada sebuah GameObject di scene.
+2. Klik kanan komponennya -> **Run Logic Tests**.
+3. Baca Console: tiap baris `PASS` / `FAIL`, ditutup ringkasan.
+
+Atau centang `runOnStart` - hanya berpengaruh di dalam Editor.
+
+Yang diuji: wrap kolom, clear ring, sel terhalang, potongan yang melintasi
+sambungan, aturan skor & pengali, clear dari alat, dan komposisi kolam bentuk.
+
+---
+
+## 12. Menyunting lewat GitHub API
+
+Penyuntingan file di repo ini dilakukan lewat GitHub API dengan **isi file
+utuh** - bukan tambalan/diff. Selalu ambil file terbaru dulu, ubah, lalu kirim
+kembali seluruhnya.
+
+> Repo ini **tidak terindeks** oleh pencarian kode GitHub; `search_code` selalu
+> mengembalikan nol hasil. Pakai `get_file_contents` dan baca file utuh.
+
+---
+
+## 13. Aset lain
+
+```
+Assets/Resources/KubikaIcons/   Hammer_A, Boom_A, Undo_A, Gem_A, Crown_A
+Assets/Resources/Voice/         good, awesome, amazing, fantastic,
+                                incredible, unstoppable, legendary   (opsional)
+```
+
+Semua ikon dan suara bersifat **opsional**: kalau berkasnya tidak ada, kode
+mundur dengan anggun ke bentuk prosedural (sprite bulat, teks, nada sintetis).
+
+### Urutan canvas (sortingOrder)
+
+| Order | Canvas |
+|---|---|
+| 5 | `KubikaItems` latar (bubble) |
+| 100 | `BlastUI` |
+| 150 | `KubikaItems` layar main |
+| 300 | `KubikaMenu` |
+| 330 | `KubikaItems` modal (toko, iklan) |
+| 400 | `KubikaItems` efek (kilat layar) |
+
+Semua canvas: `referenceResolution = (1080, 2400)`, `MatchWidthOrHeight`,
+`matchWidthOrHeight = 0.5`.
