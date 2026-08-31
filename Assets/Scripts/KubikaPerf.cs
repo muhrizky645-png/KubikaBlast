@@ -10,38 +10,35 @@ using UnityEngine;
 ///   2) vSync ikut campur sehingga input terasa 'berat'/telat.
 ///   3) Layar redup / sleep timeout mengubah refresh.
 /// Script ini memaksa FPS sesuai pilihan (default 60), mematikan vSync, dan
-/// menjaga layar tetap aktif. Nilainya sinkron dengan slider KELANCARAN di
-/// menu Pengaturan (KubikaMenu) lewat PlayerPrefs key "kubika_fps".
+/// menjaga layar tetap aktif.
 ///
-/// SENSITIVITAS: nilai 0.2 - 1.0 disimpan permanen (PlayerPrefs) dan diekspos
-/// lewat KubikaPerf.Sensitivity. Nilai ini SIAP DIPAKAI oleh input drag; kalau
-/// kamu mau block yang diseret ikut lebih 'ringan/responsif', tinggal pasang 1
-/// baris hook di BlastInput (lihat catatan di bawah).
+/// SATU SUMBER KEBENARAN: nilainya disimpan di PlayerPrefs key "kubika_fps".
+/// Slider KELANCARAN (SMOOTHNESS) di KubikaMenu menulis key yang SAMA, jadi
+/// keduanya tidak mungkin berbeda. Kalau menambah tempat lain yang mengubah
+/// FPS, lewatkan juga ke sini — jangan menyetel Application.targetFrameRate
+/// langsung dari script baru.
+///
+/// CATATAN: dulu file ini juga menyimpan "Sensitivity" (0.2 - 1.0) beserta
+/// komentar panjang tentang cara mengaitkannya ke drag. Semuanya sudah dibuang:
+/// tidak ada yang pernah MEMBACA Sensitivity, tidak ada yang pernah MEMANGGIL
+/// SetSensitivity, tidak ada slider sensitivitas di menu Pengaturan, dan
+/// BlastInput menaruh potongan langsung di posisi pointer (tanpa lerp) sehingga
+/// hook yang dijelaskan komentar itu tidak punya tempat menempel.
 /// </summary>
 public class KubikaPerf : MonoBehaviour
 {
     public static KubikaPerf Instance { get; private set; }
 
     public const string FPS_KEY = "kubika_fps";
-    public const string SENS_KEY = "kubika_sensitivity";
 
     /// <summary>Target FPS aktif (30/60/90/120).</summary>
     public static int TargetFps => Mathf.Clamp(PlayerPrefs.GetInt(FPS_KEY, 60), 30, 120);
-
-    /// <summary>Sensitivitas layar 0.2 (lambat) - 1.0 (paling responsif).</summary>
-    public static float Sensitivity => Mathf.Clamp(PlayerPrefs.GetFloat(SENS_KEY, 1f), 0.2f, 1f);
 
     public static void SetFps(int fps)
     {
         PlayerPrefs.SetInt(FPS_KEY, Mathf.Clamp(fps, 30, 120));
         PlayerPrefs.Save();
         if (Instance != null) Instance.Apply();
-    }
-
-    public static void SetSensitivity(float v)
-    {
-        PlayerPrefs.SetFloat(SENS_KEY, Mathf.Clamp(v, 0.2f, 1f));
-        PlayerPrefs.Save();
     }
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
@@ -60,6 +57,8 @@ public class KubikaPerf : MonoBehaviour
         Apply();
     }
 
+    void OnDestroy() { if (Instance == this) Instance = null; }
+
     public void Apply()
     {
         // vSync sering membuat sentuhan terasa 'berat/telat' di HP -> matikan.
@@ -71,21 +70,5 @@ public class KubikaPerf : MonoBehaviour
     }
 
     // Jaga-jaga kalau ada sistem lain me-reset nilainya saat ganti scene.
-    void OnEnable() { Apply(); }
+    void OnEnable() { if (Instance == this) Apply(); }
 }
-
-// ============================================================================
-// CATATAN: cara mengaitkan 'Sensitivity' ke drag block (opsional, 1 baris).
-// Kalau kamu ingin block yang diseret mengikuti jari lebih ringan/responsif,
-// di BlastInput, tempat piece dipindah ke posisi pointer, ganti pola lerp:
-//
-//     piece.position = Vector3.Lerp(piece.position, target, follow * Time.deltaTime);
-//
-// menjadi (sensitivitas 1.0 = langsung menempel, lebih kecil = lebih halus):
-//
-//     float f = Mathf.Lerp(12f, 40f, KubikaPerf.Sensitivity);
-//     piece.position = Vector3.Lerp(piece.position, target, f * Time.deltaTime);
-//
-// Kalau BlastInput sudah menyetel posisi langsung (tanpa lerp), berarti drag
-// sudah 'instan' dan rasa berat murni dari FPS/vSync yang sudah diperbaiki di atas.
-// ============================================================================
