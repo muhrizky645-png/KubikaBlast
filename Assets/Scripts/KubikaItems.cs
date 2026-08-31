@@ -13,34 +13,21 @@ using UnityEngine.InputSystem;
 using KubikaBlast;
 
 /// <summary>
-/// SISTEM ITEM / POWER-UP + PERMATA untuk Kubika Blast (ADD-ON, tanpa edit kode game).
+/// SISTEM ITEM / POWER-UP + PERMATA untuk Kubika Blast (ADD-ON).
 ///
-/// >>> TANPA SETTING UNITY <<< Taruh file ini di folder "Assets", tekan Play.
+/// Item: HAMMER (baris+kolom), BOMB (4x4), UNDO (batalkan langkah).
+/// Didapat dari bubble + iklan (simulasi), atau dibeli di TOKO pakai permata.
 ///
-/// Item:
-///   - HAMMER : tap 1 block -> 1 baris + 1 kolom hancur.
-///   - BOMB   : tap 1 block -> area 4x4 hancur.
-///   - UNDO   : batalkan penempatan terakhir.
-/// Cara dapat: BUBBLE item jatuh acak saat main -> di-tap -> konfirmasi nonton
-/// iklan (simulasi) -> item MASUK KOLEKSI. Atau beli di TOKO pakai permata.
+/// EKONOMI PERMATA: kelas ini MENDENGARKAN BlastGame.OnCleared dan menyimpan
+/// info.Gems. Clear dari alat datang bertanda FromTool dan TIDAK dibayar,
+/// supaya membeli palu tak pernah bisa menghasilkan permata melebihi harganya.
 ///
-/// EKONOMI PERMATA (dirombak):
-///   Dulu hadiahnya `Mathf.Max(1, Combo)` dari hasil MEMANTAU LinesCleared, jadi
-///   clear 4 baris di combo 1 dibayar persis sama dengan clear 1 baris, dan
-///   angkanya mengabaikan rumus permata yang kini dimiliki BlastCore.
-///   Sekarang kelas ini MENDENGARKAN BlastGame.OnCleared dan menyimpan
-///   info.Gems. Clear dari alat datang dengan tanda FromTool dan TIDAK dibayar,
-///   supaya beli palu tak pernah bisa menghasilkan permata lebih banyak dari
-///   harganya.
-///
-/// Semua tap dideteksi manual (tanpa EventSystem). Skrip ini berjalan pada
-/// execution order default (0), jadi LEBIH DULU dari BlastInput (order 1000) =>
-/// bisa mengambil snapshot papan SEBELUM langkah pemain untuk fitur UNDO.
+/// Execution order default (0) -> jalan SEBELUM BlastInput (1000), jadi bisa
+/// mengambil snapshot papan sebelum langkah pemain untuk fitur UNDO.
 /// </summary>
 public class KubikaItems : MonoBehaviour
 {
     public static KubikaItems Instance { get; private set; }
-    // Dibaca sistem lain agar tap buff tidak ikut menaruh balok.
     public static bool TargetingActive => Instance != null && Instance._mode != Mode.None;
     public static float LastBuffUseTime = -999f;
 
@@ -48,27 +35,25 @@ public class KubikaItems : MonoBehaviour
     enum Mode { None, Hammer, Bomb }
     Mode _mode = Mode.None;
 
-    // ---- PlayerPrefs keys ----
     const string GEM_KEY = "kubika_gems";
     static readonly string[] ITEM_KEY = { "kubika_item_hammer", "kubika_item_bomb", "kubika_item_undo" };
 
-    // HARGA. Diturunkan dari { 200, 600, 400 }. Dengan rumus permata BlastCore
-    // (3 permata untuk satu baris polos), harga lama berarti sebuah bom setara
-    // sekitar dua ratus baris - praktis tak pernah terbeli.
-    static readonly int[] PRICE = { 120, 260, 180 };            // Hammer, Bomb, Undo
+    // Diturunkan dari { 200, 600, 400 }. Dengan rumus permata BlastCore (3 untuk
+    // satu baris polos), harga lama membuat sebuah bom setara ~200 baris.
+    static readonly int[] PRICE = { 120, 260, 180 };
     static readonly string[] NAME = { "HAMMER", "BOMB", "UNDO" };
     static readonly Color[] ICOL =
     {
-        new Color(1.00f, 0.72f, 0.30f), // Hammer - oranye
-        new Color(1.00f, 0.36f, 0.48f), // Bomb   - merah muda
-        new Color(0.31f, 0.76f, 0.97f), // Undo   - biru
+        new Color(1.00f, 0.72f, 0.30f),
+        new Color(1.00f, 0.36f, 0.48f),
+        new Color(0.31f, 0.76f, 0.97f),
     };
 
-    /// <summary>Batas jumlah sprite permata yang terbang sekaligus.</summary>
     const int MAX_GEM_SPRITES = 20;
+    const float BUBBLE_STOP_Y = -360f;
+    static readonly Vector2 C = new Vector2(0.5f, 0.5f);
 
-    BlastGame _game;
-    BlastGame _hookedGame;
+    BlastGame _game, _hookedGame;
     BlastInput _input;
     BlastCore _core;
     Camera _cam;
@@ -77,33 +62,28 @@ public class KubikaItems : MonoBehaviour
     Canvas _play, _modal, _backCanvas, _fxCanvas;
     Image _flash;
     Font _font;
-    Sprite _round;
+    Sprite _round, _bubbleSprite;
     Sprite _spHammer, _spBomb, _spUndo, _spGem, _spCrown;
 
-    // Item bar (di atas tray)
     GameObject _itemBar;
     RectTransform[] _itemBtn = new RectTransform[3];
     Text[] _itemCount = new Text[3];
     Text _gemLabel;
     RectTransform _gemPill;
 
-    // Angka permata yang DITAMPILKAN. Sengaja tertinggal dari nilai aslinya
-    // supaya bisa merangkak naik saat tiap permata mendarat, bukan melompat ke
-    // nilai akhir sebelum satu pun permata sampai.
+    // Angka permata yang DITAMPILKAN, sengaja tertinggal dari nilai asli supaya
+    // bisa merangkak naik saat tiap permata mendarat.
     int _gemShown = -1;
     int _gemsInFlight;
     Vector2 _burstOrigin = new Vector2(0f, 180f);
 
-    // Targeting hint (Hammer/Bomb)
     GameObject _hint;
     Text _hintText;
     RectTransform _btnCancel;
 
-    // Toast pesan singkat saat main
     Text _toast;
     Coroutine _toastCo;
 
-    // Bubble
     GameObject _bubble;
     RectTransform _bubbleRT;
     Text _bubbleLabel;
@@ -112,38 +92,30 @@ public class KubikaItems : MonoBehaviour
     float _nextBubble;
     bool _bubbleLanded;
     float _bubbleHoverUntil;
-    Sprite _bubbleSprite;
-    const float BUBBLE_STOP_Y = -360f;
 
-    // Konfirmasi iklan
     GameObject _confirm;
     Text _confirmText;
     RectTransform _btnYes, _btnNo;
     Item _pending;
 
-    // Iklan (simulasi)
     GameObject _adPanel;
     Text _adText;
     float _adTimer;
-    int _adPhase;   // 0 = tayang iklan, 1 = tampil hadiah
+    int _adPhase;
     Item _adItem;
 
-    // Toko
     GameObject _shop;
     Text _shopGems, _shopStatus;
     Text[] _shopOwned = new Text[3];
     RectTransform[] _shopBuy = new RectTransform[3];
     RectTransform _shopClose;
-    RectTransform _tokoBtn;   // tombol mengapung di menu Home/Jeda
+    RectTransform _tokoBtn;
 
-    // ---- Snapshot untuk UNDO ----
     int[,] _snapGrid, _undoGrid;
     int _snapScore, _snapCombo, _snapLines, _undoScore, _undoCombo, _undoLines;
     bool _snapGO, _undoGO;
     BlastCore.Piece[] _snapTray, _undoTray;
     bool _hasSnap, _hasUndo, _selfModified;
-
-    static readonly Vector2 C = new Vector2(0.5f, 0.5f);
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void Boot()
@@ -177,28 +149,22 @@ public class KubikaItems : MonoBehaviour
         if (!_built) BuildUI();
         HookGame();
 
-        // ---- UNDO: deteksi langkah pemain & jaga snapshot (jalan sebelum BlastInput) ----
         HandleUndoSnapshot();
 
-        // ---- Visibilitas ----
         bool playing = Time.timeScale > 0f && !_core.GameOver;
         bool anyModal = _confirm.activeSelf || _adPanel.activeSelf || _shop.activeSelf;
         _itemBar.SetActive(playing && _mode == Mode.None && !anyModal);
         _hint.SetActive(playing && _mode != Mode.None && !anyModal);
         UpdateItemCounts();
 
-        // Tombol TOKO hanya muncul di menu Home / Jeda.
         string menu = KubikaMenu.CurrentScreenName;
         bool showToko = !anyModal && (menu == "Home" || menu == "Paused");
         _tokoBtn.gameObject.SetActive(showToko);
 
-        // ---- Bubble ----
         HandleBubble(playing && _mode == Mode.None && !anyModal);
 
-        // ---- Iklan (timer) ----
         if (_adPanel.activeSelf) HandleAdTimer();
 
-        // ---- Input ----
         HandleTaps();
 
         _selfModified = false;
@@ -226,8 +192,8 @@ public class KubikaItems : MonoBehaviour
 
     void HandleCleared(BlastCore.ClearInfo info)
     {
-        // Clear dari alat tidak membayar permata: kalau membayar, membeli palu
-        // bisa menghasilkan permata lebih banyak daripada harganya.
+        // Clear dari alat tidak membayar: kalau membayar, membeli palu bisa
+        // menghasilkan permata lebih banyak daripada harganya.
         if (info.FromTool) return;
 
         int gems = Mathf.Max(1, info.Gems);
@@ -245,7 +211,7 @@ public class KubikaItems : MonoBehaviour
         _mode = Mode.None;
     }
 
-    /// <summary>Titik tengah sel-sel yang benar-benar hancur, dalam koordinat canvas.</summary>
+    /// <summary>Titik tengah sel yang benar-benar hancur, dalam koordinat canvas.</summary>
     Vector2 BurstOrigin(BlastCore.ClearInfo info)
     {
         if (_cam == null) _cam = Camera.main;
@@ -264,8 +230,8 @@ public class KubikaItems : MonoBehaviour
     }
 
     /// <summary>
-    /// Ke mana permata terbang. Dulu ini konstanta piksel (-456, 962) yang hanya
-    /// benar di satu rasio layar; sekarang dibaca dari rect pil permata sendiri.
+    /// Ke mana permata terbang. Dulu konstanta piksel (-456, 962) yang hanya
+    /// benar di satu rasio layar; kini dibaca dari rect pil permata sendiri.
     /// </summary>
     Vector2 GemTarget()
     {
@@ -282,7 +248,6 @@ public class KubikaItems : MonoBehaviour
     // ============================================================
     void HandleUndoSnapshot()
     {
-        // Rebuild / restart -> reset baseline.
         if (!_hasSnap || _core.LinesCleared < _snapLines || (_snapGrid != null &&
             (_snapGrid.GetLength(0) != _core.Columns || _snapGrid.GetLength(1) != _core.Height)))
         {
@@ -291,17 +256,15 @@ public class KubikaItems : MonoBehaviour
             return;
         }
 
-        // Langkah pemain terdeteksi (skor berubah / grid berubah) & bukan aksi item kita.
         if (!_selfModified && (_core.Score != _snapScore || !GridEquals(_core.Grid, _snapGrid)))
         {
-            // snapshot sebelumnya = kondisi SEBELUM langkah -> jadi titik undo.
             _undoGrid = CloneGrid(_snapGrid);
             _undoScore = _snapScore; _undoCombo = _snapCombo; _undoLines = _snapLines; _undoGO = _snapGO;
             _undoTray = DeepCopyTray(_snapTray);
             _hasUndo = true;
         }
 
-        TakeSnapshot(); // baseline = kondisi saat ini (akhir frame ini)
+        TakeSnapshot();
     }
 
     void TakeSnapshot()
@@ -315,12 +278,11 @@ public class KubikaItems : MonoBehaviour
     void DoUndo()
     {
         if (!_hasUndo || _undoGrid == null) return;
-        // Kembalikan grid.
         for (int c = 0; c < _core.Columns; c++)
             for (int r = 0; r < _core.Height; r++)
                 _core.Grid[c, r] = _undoGrid[c, r];
         _core.Score = _undoScore; _core.Combo = _undoCombo; _core.LinesCleared = _undoLines; _core.GameOver = _undoGO;
-        // Kembalikan tray.
+
         var t = DeepCopyTray(_undoTray);
         for (int i = 0; i < _core.Tray.Length && i < t.Length; i++) _core.Tray[i] = t[i];
 
@@ -383,18 +345,14 @@ public class KubikaItems : MonoBehaviour
             return;
         }
 
-        // Spawn acak bila belum ada bubble aktif.
         if ((_bubble == null || !_bubble.activeSelf) && Time.unscaledTime >= _nextBubble)
-        {
             SpawnBubble();
-        }
 
         if (_bubble == null || !_bubble.activeSelf) return;
 
         var p = _bubbleRT.anchoredPosition;
         if (!_bubbleLanded)
         {
-            // Jatuh sampai BERHENTI di atas tray.
             p.y -= 320f * Time.deltaTime;
             if (p.y <= BUBBLE_STOP_Y)
             {
@@ -406,7 +364,6 @@ public class KubikaItems : MonoBehaviour
         }
         else
         {
-            // Mengambang pelan di tempat, lalu pergi kalau tak di-tap.
             p.y = BUBBLE_STOP_Y + Mathf.Sin(Time.unscaledTime * 2.2f) * 16f;
             _bubbleRT.anchoredPosition = p;
             if (Time.unscaledTime >= _bubbleHoverUntil) { _bubble.SetActive(false); ScheduleNextBubble(); }
@@ -419,7 +376,6 @@ public class KubikaItems : MonoBehaviour
     void SpawnBubble()
     {
         _bubbleItem = (Item)Random.Range(0, 3);
-        // Jalur kiri / kanan tabung (bergantian acak), mulai dari atas layar.
         float lane = (Random.value < 0.5f) ? -430f : 430f;
         _bubbleRT.anchoredPosition = new Vector2(lane, 1300f);
         _bubbleRT.localRotation = Quaternion.identity;
@@ -431,7 +387,7 @@ public class KubikaItems : MonoBehaviour
             _bubbleIcon.sprite = bSp;
             _bubbleIcon.gameObject.SetActive(true);
             _bubbleLabel.text = "";
-            img.color = new Color(0.70f, 0.88f, 1f, 0.55f); // kaca kebiruan
+            img.color = new Color(0.70f, 0.88f, 1f, 0.55f);
         }
         else
         {
@@ -468,10 +424,7 @@ public class KubikaItems : MonoBehaviour
         if (_adTimer > 0f)
         {
             if (_adPhase == 0)
-            {
-                int s = Mathf.CeilToInt(_adTimer);
-                _adText.text = "Showing ad...\n(simulated)  " + s;
-            }
+                _adText.text = "Showing ad...\n(simulated)  " + Mathf.CeilToInt(_adTimer);
             return;
         }
         if (_adPhase == 0)
@@ -481,18 +434,15 @@ public class KubikaItems : MonoBehaviour
             _adTimer = 1.3f;
             _adText.text = "+1 " + NAME[(int)_adItem] + "\nadded to your items!";
         }
-        else
-        {
-            _adPanel.SetActive(false);
-        }
+        else _adPanel.SetActive(false);
     }
 
     // ============================================================
-    //  PAKAI ITEM (Hammer / Bomb / Undo)
+    //  PAKAI ITEM
     // ============================================================
     void OnItemButton(Item it)
     {
-        if (GetItem(it) <= 0) { OpenShop(); return; } // habis -> arahkan ke toko
+        if (GetItem(it) <= 0) { OpenShop(); return; }
         switch (it)
         {
             case Item.Undo:
@@ -518,18 +468,16 @@ public class KubikaItems : MonoBehaviour
     {
         if (_cam == null) _cam = Camera.main;
         if (_cam == null) return;
-        if (!RaycastCell(sp, out int c, out int r)) return; // meleset -> tetap di mode
+        if (!RaycastCell(sp, out int c, out int r)) return;
 
-        // Kumpulkan sel yang terdampak.
         var cells = new List<(int c, int r)>();
         if (_mode == Mode.Hammer)
         {
-            for (int rr = 0; rr < _core.Height; rr++) cells.Add((c, rr));             // kolom vertikal penuh
-            for (int cc = 0; cc < _core.Columns; cc++) if (cc != c) cells.Add((cc, r)); // baris (cincin) penuh
+            for (int rr = 0; rr < _core.Height; rr++) cells.Add((c, rr));
+            for (int cc = 0; cc < _core.Columns; cc++) if (cc != c) cells.Add((cc, r));
         }
         else if (_mode == Mode.Bomb)
         {
-            // 4x4: sel yang di-tap = 1 titik kiri-bawah dari titik tengah (offset -1..+2).
             for (int dc = -1; dc <= 2; dc++)
                 for (int dr = -1; dr <= 2; dr++)
                 {
@@ -540,7 +488,7 @@ public class KubikaItems : MonoBehaviour
         }
         else return;
 
-        // Rekam warna + posisi (lokal papan) SEBELUM grid dibersihkan, untuk efek.
+        // Rekam warna + posisi SEBELUM grid dibersihkan, untuk efek.
         var caps = new List<(int color, Vector3 pos, Quaternion rot)>();
         var seen = new HashSet<int>();
         foreach (var (cc, rr) in cells)
@@ -556,25 +504,22 @@ public class KubikaItems : MonoBehaviour
         bool bomb = _mode == Mode.Bomb;
         Vector3 center = _game.CellToWorld(c, r);
 
-        // Hapus lewat BlastCore.BlastCells, BUKAN menulis Grid[c,r] = -1 sendiri.
-        // Menulis langsung melewatkan pencatatan statistik dan - yang lebih
-        // penting - melewatkan penghitungan ulang game over, sehingga sebuah alat
-        // bisa membebaskan papan tapi game tetap merasa buntu.
+        // Lewat BlastCore.BlastCells, BUKAN menulis Grid[c,r] = -1 sendiri.
+        // Menulis langsung melewatkan penghitungan ulang game over, sehingga
+        // sebuah alat bisa membebaskan papan tapi game tetap merasa buntu.
         _core.BlastCells(cells);
 
         AddItem(bomb ? Item.Bomb : Item.Hammer, -1);
-        // Suara palu & bom diputar di dalam BlockFx (palu: per-blok; bom: saat klimaks).
 
         _game.RenderGrid();
         _selfModified = true;
-        _hasUndo = false;        // aksi item tidak bisa di-undo
+        _hasUndo = false;
         TakeSnapshot();
         _mode = Mode.None;
 
         StartCoroutine(BlockFx(caps, bomb, center));
     }
 
-    // Pasang collider sementara ke tiap block, raycast, lalu ambil (c,r) dari nama.
     bool RaycastCell(Vector2 sp, out int col, out int row)
     {
         col = 0; row = 0;
@@ -600,12 +545,7 @@ public class KubikaItems : MonoBehaviour
     //  TOKO
     // ============================================================
     public static void OpenShop() { if (Instance != null) Instance.OpenShopInternal(); }
-    void OpenShopInternal()
-    {
-        _shopStatus.text = "";
-        RefreshShop();
-        _shop.SetActive(true);
-    }
+    void OpenShopInternal() { _shopStatus.text = ""; RefreshShop(); _shop.SetActive(true); }
     void CloseShop() { _shop.SetActive(false); }
 
     void Buy(Item it)
@@ -640,18 +580,17 @@ public class KubikaItems : MonoBehaviour
         if (_gemLabel == null) return;
         int real = GetGems();
         if (_gemShown < 0) _gemShown = real;
-        // Kalau tidak ada permata yang sedang terbang, angka tampilan harus sama
-        // dengan angka asli (mis. setelah belanja atau memuat ulang).
+        // Tidak ada permata terbang -> angka tampilan harus sama dengan aslinya.
         if (_gemsInFlight <= 0 && _gemShown != real) _gemShown = real;
         _gemLabel.text = _gemShown.ToString();
     }
 
     // ============================================================
     //  TOAST
+    //  Dulu pesan seperti "belum ada langkah untuk di-undo" ditulis ke
+    //  _shopStatus, yang hidup DI DALAM panel toko - jadi hanya terlihat kalau
+    //  toko kebetulan terbuka.
     // ============================================================
-    // Dulu pesan seperti "belum ada langkah untuk di-undo" ditulis ke _shopStatus,
-    // yang hidup DI DALAM panel toko - jadi pesannya hanya terlihat kalau toko
-    // kebetulan sedang terbuka. Sekarang ada toast sungguhan di layar main.
     void FlashHint(string msg)
     {
         if (_toast == null) return;
@@ -697,8 +636,7 @@ public class KubikaItems : MonoBehaviour
         bool down = PDown();
         Vector2 p = PPos();
 
-        // Prioritas modal.
-        if (_adPanel.activeSelf) return; // iklan: tunggu selesai
+        if (_adPanel.activeSelf) return;
         if (_confirm.activeSelf)
         {
             if (down)
@@ -719,19 +657,16 @@ public class KubikaItems : MonoBehaviour
         }
         if (!down) return;
 
-        // Tombol TOKO di menu.
         if (_tokoBtn.gameObject.activeSelf && Hit(_tokoBtn, p)) { OpenShop(); return; }
 
-        // Mode targeting (Hammer/Bomb).
         if (_mode != Mode.None)
         {
-            LastBuffUseTime = Time.unscaledTime; // tandai: tap ini untuk buff, bukan menaruh balok
+            LastBuffUseTime = Time.unscaledTime;
             if (Hit(_btnCancel, p)) CancelTarget();
             else TryTargetTap(p);
             return;
         }
 
-        // Saat main.
         if (Time.timeScale > 0f && !_core.GameOver)
         {
             if (_bubble != null && _bubble.activeSelf && Hit(_bubbleRT, p))
@@ -753,10 +688,10 @@ public class KubikaItems : MonoBehaviour
     {
         _built = true;
         LoadIcons();
-        _backCanvas = MakeCanvas("KubikaItemsBack", 5);   // di belakang UI lain (bubble)
+        _backCanvas = MakeCanvas("KubikaItemsBack", 5);
         _play = MakeCanvas("KubikaItemsCanvas", 150);
         _modal = MakeCanvas("KubikaItemsModal", 330);
-        _fxCanvas = MakeCanvas("KubikaItemsFx", 400);   // flash layar (paling atas)
+        _fxCanvas = MakeCanvas("KubikaItemsFx", 400);
 
         BuildFxOverlay();
         BuildItemBar();
@@ -833,7 +768,6 @@ public class KubikaItems : MonoBehaviour
 
     void BuildGemHud()
     {
-        // Chip permata di KIRI ATAS (di bawah baris Level).
         var pill = MakeSprite("gemPill", _play.transform, new Color(0.10f, 0.12f, 0.20f, 0.72f));
         Place(pill.rectTransform, new Vector2(0f, 1f), new Vector2(36f, -196f), new Vector2(300f, 92f));
         _gemPill = pill.rectTransform;
@@ -1104,7 +1038,7 @@ public class KubikaItems : MonoBehaviour
            && RectTransformUtility.RectangleContainsScreenPoint(rt, sp, null);
 
     // ============================================================
-    //  IKON & EFEK VISUAL
+    //  IKON & SPRITE PROSEDURAL
     // ============================================================
     void LoadIcons()
     {
@@ -1122,7 +1056,6 @@ public class KubikaItems : MonoBehaviour
         return Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), C, 100f);
     }
 
-    // ---- Sprite gelembung bulat (kaca) ----
     Sprite BubbleSprite()
     {
         if (_bubbleSprite != null) return _bubbleSprite;
@@ -1130,7 +1063,7 @@ public class KubikaItems : MonoBehaviour
         tex.wrapMode = TextureWrapMode.Clamp; tex.filterMode = FilterMode.Bilinear;
         var px = new Color32[s * s];
         float cx = s * 0.5f, cy = s * 0.5f, R = s * 0.5f - 1f;
-        float hx = s * 0.36f, hy = s * 0.66f; // titik highlight kiri-atas
+        float hx = s * 0.36f, hy = s * 0.66f;
         for (int y = 0; y < s; y++)
             for (int x = 0; x < s; x++)
             {
@@ -1149,7 +1082,6 @@ public class KubikaItems : MonoBehaviour
         return _bubbleSprite;
     }
 
-    // ---- Material FX 3D (kilat & pecahan blok) ----
     Material FxMat(Color col, float emis)
     {
         var sh = Shader.Find("Universal Render Pipeline/Lit");
@@ -1162,15 +1094,13 @@ public class KubikaItems : MonoBehaviour
     }
 
     // ============================================================
-    //  JUICE: flash layar, getar kamera, hit-stop, shockwave
-    //
-    //  CATATAN PENTING: getar kamera & hit-stop TIDAK lagi dikerjakan sendiri di
-    //  sini. Dulu file ini menulis Camera.main.localPosition langsung lalu
-    //  memulihkan posisi yang KEBETULAN dilihatnya saat mulai; kini BlastGame
-    //  juga menggetarkan kamera, jadi keduanya akan saling menimpa dan bisa
-    //  meninggalkan kamera melenceng. Hit-stop pun dulu menyetel Time.timeScale
-    //  sendiri, padahal jaring pengaman KubikaMenu hanya tahu harus mengalah
-    //  untuk BlastGame.HitStopActive.
+    //  JUICE
+    //  Getar kamera & hit-stop TIDAK lagi dikerjakan sendiri di sini. Dulu file
+    //  ini menulis Camera.main.localPosition langsung lalu memulihkan posisi
+    //  yang KEBETULAN dilihatnya; kini BlastGame juga menggetarkan kamera, jadi
+    //  keduanya saling menimpa dan bisa meninggalkan kamera melenceng. Hit-stop
+    //  pun dulu menyetel Time.timeScale sendiri, padahal jaring pengaman
+    //  KubikaMenu hanya tahu harus mengalah untuk BlastGame.HitStopActive.
     // ============================================================
     void BuildFxOverlay()
     {
@@ -1207,8 +1137,8 @@ public class KubikaItems : MonoBehaviour
         img.sprite = RoundSprite();
         var rt = img.rectTransform;
         rt.anchorMin = rt.anchorMax = rt.pivot = C;
-        Vector2 local;
-        RectTransformUtility.ScreenPointToLocalPointInRectangle((RectTransform)_play.transform, screenPos, null, out local);
+        RectTransformUtility.ScreenPointToLocalPointInRectangle(
+            (RectTransform)_play.transform, screenPos, null, out Vector2 local);
         rt.anchoredPosition = local;
         rt.sizeDelta = new Vector2(120, 120);
         float baseA = col.a;
@@ -1237,7 +1167,6 @@ public class KubikaItems : MonoBehaviour
             ? (Vector2)_cam.WorldToScreenPoint(worldCenter)
             : new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
 
-        // HAMMER: blok dihantam SATU-PER-SATU merambat dari titik tap.
         if (!bomb)
         {
             yield return StartCoroutine(HammerCascade(caps, center, screenCenter, mesh, bs));
@@ -1251,7 +1180,7 @@ public class KubikaItems : MonoBehaviour
         var flashes = new List<GameObject>(caps.Count);
         var cols = new List<Color>(caps.Count);
         var startAt = new float[caps.Count];
-        float igniteSpread = 0.30f;
+        const float igniteSpread = 0.30f;
 
         for (int i = 0; i < caps.Count; i++)
         {
@@ -1274,7 +1203,6 @@ public class KubikaItems : MonoBehaviour
             flashes.Add(go);
         }
 
-        // Fase menyala: warna blok -> putih cahaya.
         float ramp = 0.16f;
         float total = igniteSpread + ramp + 0.05f;
         float t = 0f;
@@ -1295,7 +1223,7 @@ public class KubikaItems : MonoBehaviour
             yield return null;
         }
 
-        // BOM: klimaks ledakan -> suara + getar besar + kilat + shockwave ganda.
+        // Klimaks ledakan.
         if (KubikaSfx.Instance != null) KubikaSfx.Instance.PlayBomb();
         StartCoroutine(FlashScreen(new Color(1f, 0.85f, 0.55f), 0.6f, 0.26f));
         Shake(1.0f);
@@ -1303,7 +1231,6 @@ public class KubikaItems : MonoBehaviour
         StartCoroutine(ShockRing(screenCenter, new Color(1f, 0.95f, 0.6f, 0.5f), 4.0f, 0.3f));
         HitStop(0.07f, 0.06f);
 
-        // Fase pecah: kilat hilang, hamburkan pecahan warna blok.
         for (int i = 0; i < flashes.Count; i++)
         {
             if (flashes[i] != null) Destroy(flashes[i]);
@@ -1311,16 +1238,13 @@ public class KubikaItems : MonoBehaviour
         }
     }
 
-    // HAMMER: hancurkan blok satu-per-satu, merambat keluar dari titik tap.
     IEnumerator HammerCascade(List<(int color, Vector3 pos, Quaternion rot)> caps, Vector3 center, Vector2 screenCenter, Mesh mesh, Vector3 bs)
     {
-        // Hentakan awal di titik tap.
-        StartCoroutine(FlashScreen(new Color(1f, 1f, 1f), 0.34f, 0.12f));
+        StartCoroutine(FlashScreen(Color.white, 0.34f, 0.12f));
         Shake(0.45f);
         StartCoroutine(ShockRing(screenCenter, new Color(1f, 0.96f, 0.75f, 0.6f), 3.6f, 0.3f));
         HitStop(0.045f, 0.06f);
 
-        // Urut dari yang paling dekat titik tap supaya efek merambat keluar.
         caps.Sort((a, b) => (a.pos - center).sqrMagnitude.CompareTo((b.pos - center).sqrMagnitude));
 
         for (int i = 0; i < caps.Count; i++)
@@ -1329,7 +1253,6 @@ public class KubikaItems : MonoBehaviour
             Color bc = (_game.palette != null && cap.color >= 0 && cap.color < _game.palette.Length)
                 ? _game.palette[cap.color] : new Color(0.7f, 0.7f, 0.7f);
 
-            // Suara: hentakan tebal di blok pertama, lalu tik pendek pitch-naik.
             if (KubikaSfx.Instance != null)
             {
                 if (i == 0) KubikaSfx.Instance.PlayHammer();
@@ -1338,14 +1261,12 @@ public class KubikaItems : MonoBehaviour
 
             StartCoroutine(HammerHitOne(cap.pos, cap.rot, bc, mesh, bs));
 
-            // Getaran mikro tiap beberapa pukulan biar terasa berdenyut.
             if (i > 0 && (i % 2 == 0)) Shake(0.16f);
 
             yield return new WaitForSecondsRealtime(0.07f);
         }
     }
 
-    // Satu blok: kilatan putih membesar cepat, lalu pecah jadi debris.
     IEnumerator HammerHitOne(Vector3 localPos, Quaternion rot, Color col, Mesh mesh, Vector3 bs)
     {
         var go = new GameObject("KItemHit");
@@ -1359,8 +1280,7 @@ public class KubikaItems : MonoBehaviour
         mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         mr.receiveShadows = false;
 
-        float dur = 0.12f;
-        float t = 0f;
+        float dur = 0.12f, t = 0f;
         while (t < dur)
         {
             t += Time.deltaTime;
@@ -1411,23 +1331,20 @@ public class KubikaItems : MonoBehaviour
             vel += Vector3.down * 7f * dt;
             go.transform.localPosition += vel * dt;
             go.transform.Rotate(240f * dt, 170f * dt, 90f * dt);
-            float k = t / dur;
-            go.transform.localScale = Vector3.Lerp(s0, s0 * 0.15f, k);
+            go.transform.localScale = Vector3.Lerp(s0, s0 * 0.15f, t / dur);
             yield return null;
         }
         if (go != null) Destroy(go);
     }
 
     // ============================================================
-    //  PERMATA: hadiah yang terasa layak dirayakan
-    //
+    //  PERMATA
     //  Dulu: maksimal 8 sprite berapa pun permata yang didapat, dan angka HUD
     //  melompat ke nilai akhir saat itu juga - sebelum satu pun permata sampai,
     //  jadi permata yang terbang tidak berarti apa-apa. Sekarang jumlahnya nyata
     //  (sampai 20, masing-masing membawa jatahnya), melengkung ke HUD sambil
     //  meninggalkan jejak, dan angkanya merangkak naik seiring pendaratan.
     // ============================================================
-
     IEnumerator GemBurst(int gems, int combo)
     {
         if (_play == null || _gemLabel == null) yield break;
@@ -1518,4 +1435,146 @@ public class KubikaItems : MonoBehaviour
                 StartCoroutine(TrailDot(pos, 34f * (1f - e * 0.5f), trailCol));
             }
             yield return null;
-        
+        }
+
+        Destroy(img.gameObject);
+
+        // 4) Mendarat: kilau kecil, angka HUD naik, tik nada meninggi.
+        StartCoroutine(LandFlash(target));
+        if (_gemLabel != null) StartCoroutine(PunchLabel(_gemLabel.rectTransform));
+        _gemShown = Mathf.Min(GetGems(), Mathf.Max(0, _gemShown) + worth);
+        if (KubikaSfx.Instance != null) KubikaSfx.Instance.PlayGemTick(index);
+        _gemsInFlight = Mathf.Max(0, _gemsInFlight - 1);
+    }
+
+    IEnumerator TrailDot(Vector2 pos, float size, Color col)
+    {
+        var img = MakeImage("gemTrail", _play.transform, col);
+        img.sprite = RoundSprite();
+        var rt = img.rectTransform;
+        rt.anchorMin = rt.anchorMax = rt.pivot = C;
+        rt.anchoredPosition = pos;
+        rt.sizeDelta = new Vector2(size, size);
+        float t = 0f, dur = 0.26f;
+        while (t < dur)
+        {
+            t += Time.unscaledDeltaTime;
+            float k = t / dur;
+            rt.localScale = Vector3.one * Mathf.Lerp(1f, 0.2f, k);
+            var c = col; c.a = Mathf.Lerp(col.a, 0f, k); img.color = c;
+            yield return null;
+        }
+        Destroy(img.gameObject);
+    }
+
+    IEnumerator LandFlash(Vector2 at)
+    {
+        var img = MakeImage("gemLand", _play.transform, new Color(0.8f, 0.96f, 1f, 0.75f));
+        img.sprite = RoundSprite();
+        var rt = img.rectTransform;
+        rt.anchorMin = rt.anchorMax = rt.pivot = C;
+        rt.anchoredPosition = at;
+        rt.sizeDelta = new Vector2(70, 70);
+        float t = 0f, dur = 0.22f;
+        while (t < dur)
+        {
+            t += Time.unscaledDeltaTime;
+            float k = t / dur;
+            rt.localScale = Vector3.one * Mathf.Lerp(0.4f, 2.2f, k);
+            var c = img.color; c.a = Mathf.Lerp(0.75f, 0f, k); img.color = c;
+            yield return null;
+        }
+        Destroy(img.gameObject);
+    }
+
+    IEnumerator GemRing(Vector2 center, int combo)
+    {
+        Color col = (combo >= 7) ? new Color(1f, 0.55f, 0.80f, 0.60f)
+                  : (combo >= 5) ? new Color(1f, 0.72f, 0.35f, 0.60f)
+                                 : new Color(0.80f, 0.90f, 1f, 0.55f);
+
+        var img = MakeImage("gemRing", _play.transform, col);
+        img.sprite = RoundSprite();
+        var rt = img.rectTransform;
+        rt.anchorMin = rt.anchorMax = rt.pivot = C;
+        rt.anchoredPosition = center;
+        rt.sizeDelta = new Vector2(120, 120);
+
+        float baseA = col.a;
+        float t = 0f, dur = 0.34f;
+        while (t < dur)
+        {
+            t += Time.unscaledDeltaTime;
+            float k = t / dur;
+            rt.localScale = Vector3.one * Mathf.Lerp(0.4f, 3.4f, k);
+            var c = col; c.a = Mathf.Lerp(baseA, 0f, k); img.color = c;
+            yield return null;
+        }
+        Destroy(img.gameObject);
+    }
+
+    IEnumerator GemGainPopup(int amount, Vector2 at)
+    {
+        var txt = MakeText("gemGain", _play.transform, 56, TextAnchor.MiddleCenter, FontStyle.Bold,
+            new Color(0.72f, 0.95f, 1f));
+        txt.text = "+" + amount;
+        Place(txt.rectTransform, C, at, new Vector2(320f, 90f));
+        var rt = txt.rectTransform;
+
+        Vector2 from = at, to = at + new Vector2(0f, 130f);
+        float t = 0f, dur = 0.8f;
+        while (t < dur)
+        {
+            t += Time.unscaledDeltaTime;
+            float k = Mathf.Clamp01(t / dur);
+            rt.anchoredPosition = Vector2.Lerp(from, to, k * k * (3f - 2f * k));
+            rt.localScale = Vector3.one * Mathf.Lerp(0.6f, 1.15f, Mathf.Min(1f, k * 4f));
+            var c = txt.color;
+            c.a = 1f - Mathf.Clamp01((k - 0.55f) / 0.45f);
+            txt.color = c;
+            yield return null;
+        }
+        Destroy(txt.gameObject);
+    }
+
+    IEnumerator PunchLabel(RectTransform rt)
+    {
+        if (rt == null) yield break;
+        float t = 0f, dur = 0.18f;
+        while (t < dur)
+        {
+            t += Time.unscaledDeltaTime;
+            float s = 1f + 0.35f * Mathf.Sin((t / dur) * Mathf.PI);
+            rt.localScale = new Vector3(s, s, 1f);
+            yield return null;
+        }
+        rt.localScale = Vector3.one;
+    }
+
+    // ---- Pointer abstraksi ----
+    Vector2 PPos()
+    {
+#if USE_NEW_INPUT
+        var m = Mouse.current;
+        if (m != null) return m.position.ReadValue();
+        var ts = Touchscreen.current;
+        if (ts != null && ts.primaryTouch != null) return ts.primaryTouch.position.ReadValue();
+        return Vector2.zero;
+#else
+        return Input.mousePosition;
+#endif
+    }
+
+    bool PDown()
+    {
+#if USE_NEW_INPUT
+        var m = Mouse.current;
+        if (m != null && m.leftButton.wasPressedThisFrame) return true;
+        var ts = Touchscreen.current;
+        if (ts != null && ts.primaryTouch != null && ts.primaryTouch.press.wasPressedThisFrame) return true;
+        return false;
+#else
+        return Input.GetMouseButtonDown(0);
+#endif
+    }
+}
