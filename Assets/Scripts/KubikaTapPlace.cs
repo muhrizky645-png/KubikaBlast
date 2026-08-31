@@ -1,10 +1,11 @@
-// KubikaTapPlace.cs — Add-on TAP-TO-PLACE untuk KUBIKA BLAST.
+// KubikaTapPlace.cs — Add-on SERET-DARI-TRAY (drag-to-place) untuk KUBIKA BLAST.
 // TIDAK menyentuh kode inti (BlastCore/BlastGame/BlastUI/BlastInput). Auto-bootstrap.
 //
 // Cara main:
-//   1) TAP potongan di tray (bawah) untuk memilih.
-//   2) TAP di tabung, dekat posisi yang diinginkan -> potongan ditaruh ke sel
-//      valid TERDEKAT (magnet), jadi tidak perlu presisi.
+//   1) TEKAN potongan di tray (bawah), lalu SERET ke tabung.
+//   2) LEPAS di dekat posisi yang diinginkan -> potongan ditaruh ke sel valid
+//      TERDEKAT (magnet), jadi tidak perlu presisi.
+//   * Tap biasa / tap area kosong TIDAK menaruh potongan (harus diseret penuh dari tray).
 // Memutar tabung tetap pakai GESER (drag) bawaan BlastInput.
 #if ENABLE_INPUT_SYSTEM && !ENABLE_LEGACY_INPUT_MANAGER
 #define USE_NEW_INPUT
@@ -26,9 +27,8 @@ public class KubikaTapPlace : MonoBehaviour
         go.AddComponent<KubikaTapPlace>();
     }
 
-    [Header("Deteksi tap (bukan geser)")]
-    public float tapMaxDuration = 0.35f;   // durasi maksimum sebuah tap (detik)
-    public float tapMaxMovePx = 26f;       // pergeseran maksimum supaya masih dianggap tap
+    [Header("Deteksi seret (drag) dari tray")]
+    public float dragMinMovePx = 24f;      // jarak minimum (px) supaya dianggap benar-benar diseret
 
     [Header("Batas area tabung")]
     public float tubeBandMarginY = 0.05f;  // toleransi atas/bawah (fraksi tinggi layar)
@@ -45,6 +45,9 @@ public class KubikaTapPlace : MonoBehaviour
     float _downTime;
     bool _canceled;
 
+    int _dragSlot = -1;   // slot tray tempat gestur dimulai (-1 = tidak dari tray)
+    bool _dragging;       // true bila pointer sudah melewati ambang seret
+
     void Update()
     {
         EnsureRefs();
@@ -53,8 +56,19 @@ public class KubikaTapPlace : MonoBehaviour
         if (core == null) return;
 
         // Hanya aktif saat benar-benar sedang MAIN.
-        if (!IsPlaying()) { _down = false; return; }
-        if (core.GameOver) { _selected = -1; _down = false; return; }
+        if (!IsPlaying()) { _down = false; _dragSlot = -1; return; }
+        if (core.GameOver) { _selected = -1; _down = false; _dragSlot = -1; return; }
+
+        // Saat buff item (Palu/Bom) sedang dibidik atau baru saja dipakai, seret TIDAK
+        // boleh ikut menaruh potongan. Pakai timestamp agar tahan race antar-Update
+        // (KubikaItems me-reset mode di frame yang sama saat buff dipakai).
+        if (KubikaItems.TargetingActive || (Time.unscaledTime - KubikaItems.LastBuffUseTime) < 0.5f)
+        {
+            _selected = -1;
+            _down = false;
+            _dragSlot = -1;
+            return;
+        }
 
         if (ActiveTouchCount() > 1) _canceled = true; // multi-touch = gestur lain
 
@@ -64,45 +78,56 @@ public class KubikaTapPlace : MonoBehaviour
             _canceled = ActiveTouchCount() > 1;
             _downPos = PointerPos();
             _downTime = Time.unscaledTime;
+            _dragging = false;
+
+            // PENTING: placement hanya boleh dari gestur yang DIMULAI pada potongan tray.
+            _dragSlot = BlastUI.TraySlotAtPointer(_downPos);
+            if (_dragSlot >= 0 && IsUsable(core, _dragSlot))
+            {
+                _selected = _dragSlot;
+                if (_input != null) _input.SelectTray(_dragSlot); // highlight potongan
+            }
+        }
+
+        // Tandai sebagai seretan sungguhan begitu pointer melewati ambang.
+        if (_down && !_canceled && _dragSlot >= 0 && !_dragging
+            && Vector2.Distance(_downPos, PointerPos()) > dragMinMovePx)
+        {
+            _dragging = true;
         }
 
         if (ReleasedThisFrame())
         {
             bool wasDown = _down;
-            _down = false;
-            if (!wasDown || _canceled) return;
+            bool wasDragging = _dragging;
+            int fromSlot = _dragSlot;
             Vector2 up = PointerPos();
-            if (Time.unscaledTime - _downTime > tapMaxDuration) return;
-            if (Vector2.Distance(_downPos, up) > tapMaxMovePx) return; // itu geser, bukan tap
-            HandleTap(core, up);
+            _down = false;
+            _dragging = false;
+            _dragSlot = -1;
+
+            if (!wasDown || _canceled) return;
+
+            // Taruh HANYA bila: gestur mulai dari tray + benar-benar diseret + lepas di tabung.
+            // Tap singkat (tanpa seret) atau tap di area kosong TIDAK menaruh apa pun.
+            if (fromSlot >= 0 && wasDragging && IsUsable(core, fromSlot))
+                TryPlaceFromDrag(core, fromSlot, up);
         }
     }
 
-    void HandleTap(BlastCore core, Vector2 p)
+    void TryPlaceFromDrag(BlastCore core, int idx, Vector2 p)
     {
-        // 1) Tap pada slot tray -> pilih potongan itu.
-        int slot = BlastUI.TraySlotAtPointer(p);
-        if (slot >= 0)
-        {
-            _selected = slot;
-            if (_input != null) _input.SelectTray(slot);
-            return;
-        }
-
-        // Tap pada UI interaktif lain (mis. tombol restart) -> abaikan.
-        if (BlastUI.PointerBlocksPlacement(p)) return;
-
-        // 2) Tentukan potongan aktif.
-        int idx = ResolvePieceIndex(core);
-        if (idx < 0) return;
+        // Potongan yang sedang diseret dari tray.
         var piece = core.Tray[idx];
         if (piece == null || piece.Used) return;
 
         var cam = _cam != null ? _cam : (_cam = Camera.main);
         if (cam == null) return;
 
-        // Batasi hanya tap di area tabung, supaya tap area lain (bar item, skor,
-        // tray) tidak ikut menaruh potongan.
+        // Dilepas di atas UI interaktif lain (mis. tombol) -> batal.
+        if (BlastUI.PointerBlocksPlacement(p)) return;
+
+        // Harus dilepas di area tabung; kalau di luar -> batal (tidak menaruh).
         if (!InsideTubeBand(core, cam, p)) return;
 
         // 3) Cari sel valid TERDEKAT ke titik tap (magnet), hanya sisi depan tabung.

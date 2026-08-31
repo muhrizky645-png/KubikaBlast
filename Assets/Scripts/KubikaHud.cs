@@ -170,6 +170,7 @@ public class KubikaHud : MonoBehaviour
     {
         _praise.text = PraiseFor(tier);
         _praise.color = PraiseColor(tier);
+        if (KubikaSfx.Instance != null) KubikaSfx.Instance.PlayPraise(tier); // suara = tier SAMA dgn teks -> selalu sinkron
         _praiseActive = true;
         _praiseT = 0f;
         _praiseRT.anchoredPosition = _praiseBase;

@@ -38,7 +38,7 @@ public class KubikaSfx : MonoBehaviour
     AudioSource _sfx, _sparkSrc, _melodic, _voiceSrc, _music;
 
     AudioClip _place, _levelUp, _gameOver, _click, _invalid, _praise, _music_clip;
-    AudioClip _hammer, _bomb, _gem;
+    AudioClip _hammer, _bomb, _hammerTick, _gem;
     AudioClip[] _sparks;
 
     BlastGame _game;
@@ -126,7 +126,8 @@ public class KubikaSfx : MonoBehaviour
                 int cells = (core.LastClear.Cells != null) ? core.LastClear.Cells.Count : 0;
                 if (cells <= 0) cells = (core.LinesCleared - _pLines) * Mathf.Max(1, core.Columns);
                 StartCoroutine(ClearCascade(cells, _streak));
-                PlayPraise(_streak);
+                // Pujian (teks + suara) kini disetir tunggal oleh KubikaHud agar SINKRON.
+                // (dulu suara di sini pakai window/streak terpisah -> bisa beda dgn teks)
             }
 
             if (core.Level > _pLevel)
@@ -252,20 +253,50 @@ public class KubikaSfx : MonoBehaviour
             return Square(150f, t) * env * gate * 0.5f;
         });
 
-        _hammer = MakeClip("sfx_hammer", 0.22f, t =>
+        // PALU: whoosh -> THUD sub-bass + dentang metalik + kresek pecahan kaca.
+        _hammer = MakeClip("sfx_hammer", 0.32f, t =>
         {
-            float thud = Sine(Mathf.Lerp(220f, 90f, Mathf.Clamp01(t / 0.05f)), t) * Mathf.Exp(-t * 30f) * 0.8f;
-            float clank = (Sine(1800f, t) * 0.4f + Square(2600f, t) * 0.15f) * Mathf.Exp(-t * 55f);
-            float noise = (Random.value * 2f - 1f) * Mathf.Exp(-t * 90f) * 0.35f;
-            return (thud + clank + noise) * (1f - Mathf.Exp(-t * 800f));
+            float whoEnv = Mathf.Exp(-t * 26f) * Mathf.Clamp01(t / 0.012f);
+            float whoosh = (Random.value * 2f - 1f) * whoEnv * 0.22f;
+
+            float ti = Mathf.Max(0f, t - 0.03f);            // benturan mulai ~0.03s
+            float hit = 1f - Mathf.Exp(-ti * 700f);
+
+            float thud = Sine(Mathf.Lerp(240f, 70f, Mathf.Clamp01(ti / 0.06f)), ti) * Mathf.Exp(-ti * 24f) * 0.95f;
+            float sub  = Sine(48f, ti) * Mathf.Exp(-ti * 16f) * 0.5f;
+            float clank = (Sine(1750f, ti) * 0.35f + Square(2550f, ti) * 0.12f + Sine(3400f, ti) * 0.15f) * Mathf.Exp(-ti * 46f);
+            float grain = (Mathf.Floor(ti * 5200f) % 2f == 0f) ? 1f : 0.4f;
+            float crackle = (Random.value * 2f - 1f) * Mathf.Exp(-ti * 12f) * 0.3f * grain;
+
+            float mix = whoosh + (thud + sub + clank + crackle) * hit;
+            return (float)System.Math.Tanh(mix * 1.1f);        // soft-clip biar tebal, tak harsh
         });
 
-        _bomb = MakeClip("sfx_bomb", 0.6f, t =>
+        // PALU (tik per-block): pukulan pendek & tajam untuk hancur satu-per-satu.
+        _hammerTick = MakeClip("sfx_hammer_tick", 0.13f, t =>
         {
-            float boom = Sine(Mathf.Lerp(160f, 45f, Mathf.Clamp01(t / 0.18f)), t) * Mathf.Exp(-t * 7f) * 0.9f;
-            float noise = (Random.value * 2f - 1f) * Mathf.Exp(-t * 9f) * 0.6f;
-            float crack = (Random.value * 2f - 1f) * Mathf.Exp(-t * 60f) * 0.5f;
-            return (boom + noise + crack) * (1f - Mathf.Exp(-t * 400f));
+            float hit = 1f - Mathf.Exp(-t * 900f);
+            float tick = (Sine(2600f, t) * 0.5f + Square(3600f, t) * 0.2f) * Mathf.Exp(-t * 70f);
+            float thud = Sine(Mathf.Lerp(300f, 120f, Mathf.Clamp01(t / 0.03f)), t) * Mathf.Exp(-t * 38f) * 0.6f;
+            float chip = (Random.value * 2f - 1f) * Mathf.Exp(-t * 55f) * 0.28f;
+            float mix = (tick + thud + chip) * hit;
+            return (float)System.Math.Tanh(mix * 1.15f);
+        });
+
+        // BOM: dentuman sub-bass + body ledakan + crackle transien + debris bergema.
+        _bomb = MakeClip("sfx_bomb", 0.75f, t =>
+        {
+            float hit = 1f - Mathf.Exp(-t * 500f);
+
+            float boom = Sine(Mathf.Lerp(150f, 38f, Mathf.Clamp01(t / 0.22f)), t) * Mathf.Exp(-t * 5.5f) * 0.85f;
+            float sub  = Sine(30f, t) * Mathf.Exp(-t * 4f) * 0.5f;
+            float body = (Random.value * 2f - 1f) * Mathf.Exp(-t * 7f) * 0.55f;
+            float crack = (Random.value * 2f - 1f) * Mathf.Exp(-t * 42f) * 0.5f;
+            float grain = (Mathf.Floor(t * 3300f) % 2f == 0f) ? 1f : 0.35f;
+            float debris = (Random.value * 2f - 1f) * Mathf.Exp(-t * 3.2f) * 0.2f * grain;
+
+            float mix = (boom + sub + body + crack + debris) * hit;
+            return (float)System.Math.Tanh(mix * 1.2f);        // soft-clip -> ledakan fat & hangat
         });
 
         _gem = MakeClip("sfx_gem", 0.34f, t =>
@@ -285,8 +316,9 @@ public class KubikaSfx : MonoBehaviour
     public void PlayInvalid() => PlayOn(_sfx, _invalid, 0.8f);
     public void PlayLevelUp() => PlayOn(_melodic, _levelUp, 1f);
     public void PlayGameOver()=> PlayOn(_melodic, _gameOver, 1f);
-    public void PlayHammer()  => PlayOn(_sfx, _hammer, 1f);
-    public void PlayBomb()    => PlayOn(_sfx, _bomb, 1f);
+    public void PlayHammer()  => PlayOn(_sfx, _hammer, 1f, Random.Range(0.96f, 1.05f));
+    public void PlayHammerTick(int step) => PlayOn(_sparkSrc, _hammerTick, 0.9f, Mathf.Min(1.75f, 1f + step * 0.05f) * Random.Range(0.98f, 1.02f));
+    public void PlayBomb()    => PlayOn(_sfx, _bomb, 1f, Random.Range(0.9f, 1.0f));
     public void PlayGem()     => PlayOn(_sparkSrc, _gem, 0.9f);
 
     void PlayOn(AudioSource src, AudioClip clip, float vol, float pitch = 1f)

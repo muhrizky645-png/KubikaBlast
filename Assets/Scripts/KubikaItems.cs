@@ -33,6 +33,9 @@ using KubikaBlast;
 public class KubikaItems : MonoBehaviour
 {
     public static KubikaItems Instance { get; private set; }
+    // Dibaca KubikaTapPlace agar tap buff tidak ikut menaruh balok.
+    public static bool TargetingActive => Instance != null && Instance._mode != Mode.None;
+    public static float LastBuffUseTime = -999f;
 
     enum Item { Hammer = 0, Bomb = 1, Undo = 2 }
     enum Mode { None, Hammer, Bomb }
@@ -56,7 +59,8 @@ public class KubikaItems : MonoBehaviour
     Camera _cam;
     bool _built;
 
-    Canvas _play, _modal, _backCanvas;
+    Canvas _play, _modal, _backCanvas, _fxCanvas;
+    Image _flash;
     Font _font;
     Sprite _round;
     Sprite _spHammer, _spBomb, _spUndo, _spGem, _spCrown;
@@ -471,7 +475,7 @@ public class KubikaItems : MonoBehaviour
             if (rr >= 0 && rr < _core.Height) _core.Grid[cc, rr] = -1;
 
         AddItem(bomb ? Item.Bomb : Item.Hammer, -1);
-        if (KubikaSfx.Instance != null) { if (bomb) KubikaSfx.Instance.PlayBomb(); else KubikaSfx.Instance.PlayHammer(); }
+        // Suara palu & bom kini diputar di dalam BlockFx (palu: per-blok satu-per-satu; bom: saat klimaks).
 
         _game.RenderGrid();
         _selfModified = true;
@@ -587,6 +591,7 @@ public class KubikaItems : MonoBehaviour
         // Mode targeting (Palu/Bom).
         if (_mode != Mode.None)
         {
+            LastBuffUseTime = Time.unscaledTime; // tandai: tap ini untuk buff, bukan menaruh balok
             if (Hit(_btnCancel, p)) CancelTarget();
             else TryTargetTap(p);
             return;
@@ -617,7 +622,9 @@ public class KubikaItems : MonoBehaviour
         _backCanvas = MakeCanvas("KubikaItemsBack", 5);   // di belakang UI lain (bubble)
         _play = MakeCanvas("KubikaItemsCanvas", 150);
         _modal = MakeCanvas("KubikaItemsModal", 330);
+        _fxCanvas = MakeCanvas("KubikaItemsFx", 400);   // flash layar (paling atas)
 
+        BuildFxOverlay();
         BuildItemBar();
         BuildGemHud();
         BuildHint();
@@ -1012,6 +1019,86 @@ public class KubikaItems : MonoBehaviour
         return m;
     }
 
+    // ============================================================
+    //  JUICE: flash layar, getar kamera, hit-stop, shockwave
+    // ============================================================
+    void BuildFxOverlay()
+    {
+        _flash = MakeImage("Flash", _fxCanvas.transform, new Color(1f, 1f, 1f, 0f));
+        var rt = _flash.rectTransform;
+        rt.anchorMin = Vector2.zero; rt.anchorMax = Vector2.one;
+        rt.offsetMin = Vector2.zero; rt.offsetMax = Vector2.zero;
+        _flash.raycastTarget = false;
+    }
+
+    IEnumerator FlashScreen(Color col, float peak, float dur)
+    {
+        if (_flash == null) yield break;
+        float t = 0f;
+        while (t < dur)
+        {
+            t += Time.unscaledDeltaTime;
+            float k = Mathf.Clamp01(t / dur);
+            float a = (k < 0.25f) ? Mathf.Lerp(0f, peak, k / 0.25f)
+                                  : Mathf.Lerp(peak, 0f, (k - 0.25f) / 0.75f);
+            var c = col; c.a = a; _flash.color = c;
+            yield return null;
+        }
+        var c2 = col; c2.a = 0f; _flash.color = c2;
+    }
+
+    IEnumerator ShakeCamera(float amp, float dur)
+    {
+        if (_cam == null) _cam = Camera.main;
+        if (_cam == null) yield break;
+        var tr = _cam.transform;
+        Vector3 baseP = tr.localPosition;
+        float t = 0f;
+        while (t < dur)
+        {
+            t += Time.unscaledDeltaTime;
+            float damp = 1f - Mathf.Clamp01(t / dur);
+            Vector2 off = Random.insideUnitCircle * amp * damp;
+            tr.localPosition = baseP + new Vector3(off.x, off.y, 0f);
+            yield return null;
+        }
+        tr.localPosition = baseP;
+    }
+
+    IEnumerator HitStop(float scale, float dur)
+    {
+        float prev = Time.timeScale;
+        if (prev <= 0f) yield break;              // jangan ganggu saat game pause
+        float s = Mathf.Clamp01(scale);
+        Time.timeScale = s;
+        yield return new WaitForSecondsRealtime(dur);
+        if (Mathf.Approximately(Time.timeScale, s)) Time.timeScale = prev; // pulihkan bila belum diubah pihak lain
+    }
+
+    IEnumerator ShockRing(Vector2 screenPos, Color col, float maxScale, float dur)
+    {
+        if (_play == null) yield break;
+        var img = MakeImage("shock", _play.transform, col);
+        img.sprite = RoundSprite();
+        var rt = img.rectTransform;
+        rt.anchorMin = rt.anchorMax = rt.pivot = C;
+        Vector2 local;
+        RectTransformUtility.ScreenPointToLocalPointInRectangle((RectTransform)_play.transform, screenPos, null, out local);
+        rt.anchoredPosition = local;
+        rt.sizeDelta = new Vector2(120, 120);
+        float baseA = col.a;
+        float t = 0f;
+        while (t < dur)
+        {
+            t += Time.unscaledDeltaTime;
+            float k = Mathf.Clamp01(t / dur);
+            rt.localScale = Vector3.one * Mathf.Lerp(0.4f, maxScale, k);
+            var c = col; c.a = Mathf.Lerp(baseA, 0f, k); img.color = c;
+            yield return null;
+        }
+        Destroy(img.gameObject);
+    }
+
     // ---- Efek PALU / BOM pada blok 3D ----
     // Palu: semua blok terdampak kilat putih bersamaan lalu pecah.
     // Bom : blok menyala dari tengah lalu meluas; setelah semua nyala baru pecah.
@@ -1020,6 +1107,19 @@ public class KubikaItems : MonoBehaviour
         if (_game == null || caps == null || caps.Count == 0) yield break;
         Mesh mesh = _game.CellMesh;
         Vector3 bs = new Vector3(_game.cellWidth * _game.gap, _game.cellHeight * _game.gap, _game.blockDepth);
+
+        if (_cam == null) _cam = Camera.main;
+        Vector3 worldCenter = _game.transform.TransformPoint(center);
+        Vector2 screenCenter = _cam != null
+            ? (Vector2)_cam.WorldToScreenPoint(worldCenter)
+            : new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
+
+        // PALU: blok dihantam SATU-PER-SATU merambat dari titik tap (efek + suara per-blok).
+        if (!bomb)
+        {
+            yield return StartCoroutine(HammerCascade(caps, center, screenCenter, mesh, bs));
+            yield break;
+        }
 
         caps.Sort((a, b) => (a.pos - center).sqrMagnitude.CompareTo((b.pos - center).sqrMagnitude));
         float maxd = 0.01f;
@@ -1072,6 +1172,17 @@ public class KubikaItems : MonoBehaviour
             yield return null;
         }
 
+        // BOM: klimaks ledakan -> suara + getar besar + kilat + shockwave ganda.
+        if (bomb)
+        {
+            if (KubikaSfx.Instance != null) KubikaSfx.Instance.PlayBomb();
+            StartCoroutine(FlashScreen(new Color(1f, 0.85f, 0.55f), 0.6f, 0.26f));
+            StartCoroutine(ShakeCamera(0.26f, 0.42f));
+            StartCoroutine(ShockRing(screenCenter, new Color(1f, 0.7f, 0.3f, 0.65f), 6.5f, 0.4f));
+            StartCoroutine(ShockRing(screenCenter, new Color(1f, 0.95f, 0.6f, 0.5f), 4.0f, 0.3f));
+            StartCoroutine(HitStop(0.06f, 0.06f));
+        }
+
         // Fase pecah: kilat hilang, hamburkan pecahan warna blok.
         for (int i = 0; i < flashes.Count; i++)
         {
@@ -1080,26 +1191,94 @@ public class KubikaItems : MonoBehaviour
         }
     }
 
+    // PALU: hancurkan blok satu-per-satu, merambat keluar dari titik tap.
+    // Tiap blok: kilat putih singkat -> pecah + debris + tik suara (pitch naik).
+    IEnumerator HammerCascade(List<(int color, Vector3 pos, Quaternion rot)> caps, Vector3 center, Vector2 screenCenter, Mesh mesh, Vector3 bs)
+    {
+        // Hentakan awal di titik tap: getar + kilat + shockwave + hit-stop.
+        StartCoroutine(FlashScreen(new Color(1f, 1f, 1f), 0.34f, 0.12f));
+        StartCoroutine(ShakeCamera(0.10f, 0.18f));
+        StartCoroutine(ShockRing(screenCenter, new Color(1f, 0.96f, 0.75f, 0.6f), 3.6f, 0.3f));
+        StartCoroutine(HitStop(0.06f, 0.04f));
+
+        // Urut dari yang paling dekat titik tap supaya efek merambat keluar.
+        caps.Sort((a, b) => (a.pos - center).sqrMagnitude.CompareTo((b.pos - center).sqrMagnitude));
+
+        for (int i = 0; i < caps.Count; i++)
+        {
+            var cap = caps[i];
+            Color bc = (_game.palette != null && cap.color >= 0 && cap.color < _game.palette.Length)
+                ? _game.palette[cap.color] : new Color(0.7f, 0.7f, 0.7f);
+
+            // Suara: hentakan tebal di blok pertama, lalu tik pendek pitch-naik.
+            if (KubikaSfx.Instance != null)
+            {
+                if (i == 0) KubikaSfx.Instance.PlayHammer();
+                else KubikaSfx.Instance.PlayHammerTick(i);
+            }
+
+            // Kilat putih singkat lalu langsung pecah -> kesan "dipukul".
+            StartCoroutine(HammerHitOne(cap.pos, cap.rot, bc, mesh, bs));
+
+            // Getaran mikro tiap beberapa pukulan biar terasa berdenyut.
+            if (i > 0 && (i % 2 == 0)) StartCoroutine(ShakeCamera(0.045f, 0.08f));
+
+            yield return new WaitForSecondsRealtime(0.07f);   // sedikit lebih lambat -> lebih terasa
+        }
+    }
+
+    // Satu blok: kilatan putih membesar cepat, lalu pecah jadi debris.
+    IEnumerator HammerHitOne(Vector3 localPos, Quaternion rot, Color col, Mesh mesh, Vector3 bs)
+    {
+        var go = new GameObject("KItemHit");
+        go.transform.SetParent(_game.transform, false);
+        go.transform.localPosition = localPos;
+        go.transform.localRotation = rot;
+        go.transform.localScale = bs;
+        var mf = go.AddComponent<MeshFilter>(); mf.sharedMesh = mesh;
+        var mr = go.AddComponent<MeshRenderer>();
+        mr.material = FxMat(col, 0.2f);
+        mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        mr.receiveShadows = false;
+
+        float dur = 0.12f;   // kilat per-blok sedikit lebih lama supaya puas
+        float t = 0f;
+        while (t < dur)
+        {
+            t += Time.deltaTime;
+            float lt = Mathf.Clamp01(t / dur);
+            go.transform.localScale = bs * Mathf.Lerp(1f, 1.22f, lt);
+            var m = mr.sharedMaterial;
+            Color cc = Color.Lerp(col, Color.white, lt);
+            if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", cc);
+            m.color = cc;
+            if (m.HasProperty("_EmissionColor")) m.SetColor("_EmissionColor", cc * Mathf.Lerp(0.2f, 2f, lt));
+            yield return null;
+        }
+        Destroy(go);
+        SpawnDebris(localPos, col, mesh, bs);
+    }
+
     void SpawnDebris(Vector3 localPos, Color col, Mesh mesh, Vector3 bs)
     {
-        int n = 6;
+        int n = Random.Range(8, 12);
         for (int i = 0; i < n; i++)
         {
             var go = new GameObject("KItemDebris");
             go.transform.SetParent(_game.transform, false);
-            go.transform.localPosition = localPos + Random.insideUnitSphere * 0.12f;
+            go.transform.localPosition = localPos + Random.insideUnitSphere * 0.14f;
             go.transform.localRotation = Random.rotation;
-            float sz = Random.Range(0.16f, 0.34f);
+            float sz = Random.Range(0.12f, 0.4f);
             Vector3 s0 = new Vector3(bs.x * sz, bs.y * sz, bs.z * sz);
             go.transform.localScale = s0;
             var mf = go.AddComponent<MeshFilter>(); mf.sharedMesh = mesh;
             var mr = go.AddComponent<MeshRenderer>();
-            mr.material = FxMat(col, 0.35f);
+            mr.material = FxMat(col, 0.4f);
             mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             mr.receiveShadows = false;
             Vector3 dir = (go.transform.localPosition - localPos);
             if (dir.sqrMagnitude < 0.0001f) dir = Random.onUnitSphere;
-            Vector3 vel = dir.normalized * Random.Range(1.4f, 3.4f) + Vector3.up * Random.Range(0.6f, 2.2f);
+            Vector3 vel = dir.normalized * Random.Range(1.7f, 4.3f) + Vector3.up * Random.Range(0.7f, 2.6f);
             StartCoroutine(DebrisFx(go, vel, s0));
         }
     }
@@ -1176,7 +1355,7 @@ public class KubikaItems : MonoBehaviour
         }
 
         // Jatuh ke lantai (gravitasi) + mantul.
-        float floorY = -980f + Random.Range(-30f, 30f);
+        float floorY = -620f + Random.Range(-20f, 20f);
         float vy = Random.Range(40f, 160f);
         float vx = Random.Range(-140f, 140f);
         int bounces = 0;
