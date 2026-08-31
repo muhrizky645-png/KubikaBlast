@@ -12,9 +12,19 @@ using UnityEngine.InputSystem;
 using KubikaBlast;
 
 /// <summary>
-/// Membangun UI game SEPENUHNYA lewat kode. Skor/combo/baris/LEVEL, tray 3D, layar
-/// GAME OVER. Teks memakai outline + shadow + ukuran besar biar enak dilihat, dan
-/// potongan tray digambar bergaya 3D (bevel/gloss/shadow).
+/// Membangun UI game SEPENUHNYA lewat kode: skor/combo/baris/LEVEL + tray 3D.
+/// Teks memakai outline + shadow + ukuran besar, dan potongan tray digambar
+/// bergaya 3D (bevel/gloss/shadow).
+///
+/// CATATAN: layar GAME OVER TIDAK lagi dibangun di sini.
+///   Dulu ada DUA layar game over yang bertumpuk: panel milik file ini di
+///   sortingOrder 100, dan kartu KubikaMenu di sortingOrder 300. Yang lama
+///   tertutup rapat oleh yang baru, tapi tetap berjalan tiap frame, tetap
+///   menulis ulang teks "Skor Akhir", dan tetap memiliki tombol "MAIN LAGI"
+///   yang kotak sentuhnya duduk PERSIS di bawah tombol yang terlihat.
+///   IsOverInteractiveUI() bahkan masih menanyai tombol mati itu saat menentukan
+///   apakah sebuah tap boleh menaruh potongan. Semuanya sudah dibuang; kini
+///   KubikaMenu adalah satu-satunya pemilik layar game over.
 /// </summary>
 public class BlastUI : MonoBehaviour
 {
@@ -37,10 +47,6 @@ public class BlastUI : MonoBehaviour
     readonly List<GameObject>[] _cellImgs = new List<GameObject>[3];
     readonly object[] _lastPiece = new object[3];
     readonly bool[] _lastUsed = new bool[3];
-
-    GameObject _gameOverPanel;
-    Text _gameOverFinal;
-    RectTransform _restartRect;
 
     Font _font;
     Sprite _roundSprite;
@@ -76,6 +82,9 @@ public class BlastUI : MonoBehaviour
         Transform root = canvasGO.transform;
 
         // ---- teks status (atas) ----
+        // KubikaHud mengkloning & menyembunyikan teks-teks ini lewat refleksi
+        // (nama field _scoreText/_levelText/_comboText/_linesText). Jangan ganti
+        // nama field-nya tanpa memperbarui KubikaHud.FindText().
         _scoreText = MakeText("Score", root, 88, TextAnchor.UpperCenter, FontStyle.Bold);
         Place(_scoreText.rectTransform, new Vector2(0.5f, 1f), new Vector2(0, -40), new Vector2(1000, 120));
 
@@ -112,35 +121,6 @@ public class BlastUI : MonoBehaviour
             Place(hrt, new Vector2(0.5f, 0f), new Vector2(0, 20), new Vector2(slotW - 40, slotH - 80));
             _cellHolder[i] = hrt;
         }
-
-        BuildGameOver(root);
-    }
-
-    void BuildGameOver(Transform root)
-    {
-        var panelImg = MakeImage("GameOver", root, new Color(0f, 0f, 0f, 0.75f));
-        _gameOverPanel = panelImg.gameObject;
-        var prt = panelImg.rectTransform;
-        prt.anchorMin = Vector2.zero; prt.anchorMax = Vector2.one; prt.pivot = new Vector2(0.5f, 0.5f);
-        prt.offsetMin = Vector2.zero; prt.offsetMax = Vector2.zero;
-
-        var title = MakeText("GO_Title", _gameOverPanel.transform, 120, TextAnchor.MiddleCenter, FontStyle.Bold);
-        title.text = "GAME OVER";
-        title.color = new Color(1f, 0.4f, 0.4f);
-        Place(title.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 240), new Vector2(1000, 180));
-
-        _gameOverFinal = MakeText("GO_Final", _gameOverPanel.transform, 64, TextAnchor.MiddleCenter);
-        Place(_gameOverFinal.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 60), new Vector2(1000, 220));
-
-        var btn = MakeImage("Restart", _gameOverPanel.transform, new Color(0.30f, 0.65f, 0.95f, 1f));
-        _restartRect = btn.rectTransform;
-        Place(_restartRect, new Vector2(0.5f, 0.5f), new Vector2(0, -160), new Vector2(480, 150));
-
-        var btnText = MakeText("RestartTxt", btn.transform, 66, TextAnchor.MiddleCenter, FontStyle.Bold);
-        btnText.text = "MAIN LAGI";
-        Place(btnText.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0, 0), new Vector2(480, 150));
-
-        _gameOverPanel.SetActive(false);
     }
 
     // ==================================================================
@@ -153,17 +133,12 @@ public class BlastUI : MonoBehaviour
         var core = game.Core;
         if (core == null) return;
 
-        _scoreText.text = "Skor  " + core.Score;
+        _scoreText.text = "Score  " + core.Score;
         _comboText.text = core.Combo > 1 ? ("COMBO x" + core.Combo) : "";
-        _linesText.text = "Baris hancur: " + core.LinesCleared;
+        _linesText.text = "Lines cleared: " + core.LinesCleared;
         _levelText.text = "LEVEL " + core.Level;
 
         RefreshTray(core);
-
-        bool go = core.GameOver;
-        if (_gameOverPanel.activeSelf != go) _gameOverPanel.SetActive(go);
-        if (go) _gameOverFinal.text = "Skor Akhir\n" + core.Score;
-
         HandleTaps(core);
     }
 
@@ -249,14 +224,10 @@ public class BlastUI : MonoBehaviour
     // ==================================================================
     void HandleTaps(BlastCore core)
     {
+        // Saat game over, KubikaMenu yang pegang kendali penuh.
+        if (core.GameOver) return;
         if (!PointerPressedThisFrame()) return;
         Vector2 p = PointerPos();
-
-        if (core.GameOver)
-        {
-            if (Contains(_restartRect, p)) DoRestart();
-            return;
-        }
 
         for (int i = 0; i < 3; i++)
         {
@@ -272,7 +243,9 @@ public class BlastUI : MonoBehaviour
     bool Contains(RectTransform rt, Vector2 screenPos)
         => rt != null && RectTransformUtility.RectangleContainsScreenPoint(rt, screenPos, null);
 
-    void DoRestart()
+    /// <summary>Bangun ulang papan. Disediakan untuk pemanggil luar; layar game
+    /// over sendiri kini ditangani KubikaMenu.</summary>
+    public void DoRestart()
     {
         if (game == null) return;
         game.Rebuild();
@@ -285,7 +258,7 @@ public class BlastUI : MonoBehaviour
         if (game == null) return false;
         var core = game.Core;
         if (core == null) return false;
-        if (core.GameOver) return Contains(_restartRect, screenPos);
+        if (core.GameOver) return false;   // dulu di sini menanyai tombol restart yang sudah mati
         for (int i = 0; i < 3; i++)
         {
             var pc = core.Tray[i];
@@ -330,7 +303,6 @@ public class BlastUI : MonoBehaviour
         t.horizontalOverflow = HorizontalWrapMode.Overflow;
         t.verticalOverflow = VerticalWrapMode.Overflow;
 
-        // Custom look: shadow + outline biar teks tegas & memanjakan mata.
         var shadow = goT.AddComponent<Shadow>();
         shadow.effectColor = new Color(0f, 0f, 0f, 0.55f);
         shadow.effectDistance = new Vector2(3f, -3f);

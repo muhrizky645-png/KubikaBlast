@@ -6,6 +6,15 @@ using KubikaBlast;
 /// Warna berganti HALUS tiap NAIK LEVEL. Bootstrap OTOMATIS (tak perlu ditempel
 /// manual ke GameObject) lewat RuntimeInitializeOnLoadMethod, jadi cukup ada file
 /// ini di project. Berjalan di belakang tabung 3D.
+///
+/// DUA PERUBAHAN:
+///  1. Gelembung DIHIDUPKAN lagi. Kodenya sudah lengkap tapi terkunci di balik
+///     `if (false)`. Gerbangnya dibuka persis seperti petunjuk di komentar
+///     aslinya, termasuk baris `vel.z` yang hilang — justru itu sebabnya dulu
+///     sistemnya dimatikan.
+///  2. Background kini MENJAWAB pemain: tiap clear mendorong kilau singkat
+///     lewat gradient, kekuatannya mengikuti combo, dan gelembung memancar
+///     lebih cepat selama combo berjalan.
 /// </summary>
 public class BlastBackground : MonoBehaviour
 {
@@ -16,6 +25,11 @@ public class BlastBackground : MonoBehaviour
         var go = new GameObject("BlastBackground");
         go.AddComponent<BlastBackground>();
     }
+
+    [Header("Reaksi ke permainan")]
+    public bool enableBubbles = true;
+    public bool reactToClears = true;
+    [Range(0f, 1f)] public float bloomStrength = 0.55f;
 
     // Pasangan warna gradient (atas & bawah) per level; berputar kalau level melebihi jumlah.
     static readonly Color[] TopColors =
@@ -38,14 +52,17 @@ public class BlastBackground : MonoBehaviour
     };
 
     BlastGame _game;
+    BlastGame _hooked;
     Camera _cam;
     Material _mat;
     Texture2D _grad;
     Texture2D _dot;
     ParticleSystem _ps;
+    float _baseEmission = 9f;
 
     int _lastLevel = int.MinValue;
     Color _curTop, _curBot, _tgtTop, _tgtBot;
+    float _bloom;          // kilau sesaat setelah clear
     bool _ready;
 
     void Start()
@@ -54,15 +71,19 @@ public class BlastBackground : MonoBehaviour
         _curTop = _tgtTop = TopColors[0];
         _curBot = _tgtBot = BottomColors[0];
         EnsureRig();
-        Apply(_curTop, _curBot);
+        ApplyNow();
     }
+
+    void OnDestroy() { Unhook(); }
 
     void Update()
     {
         if (!_ready) { EnsureRig(); if (!_ready) return; }
         if (_game == null) _game = FindFirstObjectByType<BlastGame>();
+        if (_game != null && !ReferenceEquals(_game, _hooked)) Hook(_game);
 
-        int level = (_game != null && _game.Core != null) ? _game.Core.Level : 1;
+        var core = (_game != null) ? _game.Core : null;
+        int level = (core != null) ? core.Level : 1;
         if (level != _lastLevel)
         {
             _lastLevel = level;
@@ -71,12 +92,57 @@ public class BlastBackground : MonoBehaviour
             _tgtBot = BottomColors[idx];
         }
 
+        bool dirty = false;
+
         if (Far(_curTop, _tgtTop) || Far(_curBot, _tgtBot))
         {
             float k = Time.deltaTime * 2f;
             _curTop = Color.Lerp(_curTop, _tgtTop, k);
             _curBot = Color.Lerp(_curBot, _tgtBot, k);
-            Apply(_curTop, _curBot);
+            dirty = true;
+        }
+
+        if (_bloom > 0.001f)
+        {
+            _bloom = Mathf.MoveTowards(_bloom, 0f, Time.unscaledDeltaTime * 1.7f);
+            dirty = true;
+        }
+
+        if (dirty) ApplyNow();
+
+        // Gelembung memancar lebih cepat selama combo — papan terasa "hidup".
+        if (_ps != null && core != null)
+        {
+            var em = _ps.emission;
+            float boost = 1f + Mathf.Clamp01((core.Combo - 1) / 6f) * 1.6f;
+            em.rateOverTime = _baseEmission * boost;
+        }
+    }
+
+    void Hook(BlastGame g)
+    {
+        Unhook();
+        _hooked = g;
+        g.OnCleared += HandleCleared;
+    }
+
+    void Unhook()
+    {
+        if (_hooked == null) return;
+        _hooked.OnCleared -= HandleCleared;
+        _hooked = null;
+    }
+
+    void HandleCleared(BlastCore.ClearInfo info)
+    {
+        if (!reactToClears) return;
+        float combo = Mathf.Clamp01((info.Combo - 1) / 7f);
+        _bloom = Mathf.Min(1f, _bloom + 0.45f + combo * 0.55f);
+
+        if (_ps != null)
+        {
+            int burst = Mathf.Clamp((info.Cells != null ? info.Cells.Count : 0) / 3, 2, 14);
+            _ps.Emit(burst);
         }
     }
 
@@ -125,12 +191,12 @@ public class BlastBackground : MonoBehaviour
             mr.sharedMaterial = _mat;
         }
 
-        // ---- Gelembung mengambang DINONAKTIFKAN (BgBubbles dihapus permanen) ----
-        // Blok di bawah sengaja dimatikan dengan if(false) agar BgBubbles tidak
-        // pernah dibuat. Gradient background tetap jalan. Kalau suatu saat mau
-        // menghidupkan lagi tanpa error: ganti if(false) -> if(_ps == null) DAN
-        // tambahkan baris "vel.z = new ParticleSystem.MinMaxCurve(0f, 0f);" setelah vel.x.
-        if (false)
+        // ---- Gelembung mengambang: DIHIDUPKAN lagi ----
+        // Dulu terkunci di balik `if (false)`. Komentar aslinya menjelaskan cara
+        // menghidupkannya dengan aman: ganti gerbangnya DAN tambahkan vel.z.
+        // Tanpa vel.z, velocityOverLifetime punya kurva X & Y tapi Z-nya belum
+        // di-set, dan itulah kenapa sistem ini dulu dimatikan.
+        if (enableBubbles && _ps == null)
         {
             float pdist = gdist * 0.82f;
             float ph = 2f * pdist * Mathf.Tan(_cam.fieldOfView * 0.5f * Mathf.Deg2Rad);
@@ -149,12 +215,12 @@ public class BlastBackground : MonoBehaviour
             main.startLifetime = 8f;
             main.startSpeed = 0f;
             main.startSize = new ParticleSystem.MinMaxCurve(ph * 0.02f, ph * 0.06f);
-            main.maxParticles = 90;
+            main.maxParticles = 120;
             main.simulationSpace = ParticleSystemSimulationSpace.Local;
             main.startColor = new Color(1f, 1f, 1f, 0.35f);
 
             var emission = _ps.emission;
-            emission.rateOverTime = 9f;
+            emission.rateOverTime = _baseEmission;
 
             var shape = _ps.shape;
             shape.shapeType = ParticleSystemShapeType.Box;
@@ -165,6 +231,7 @@ public class BlastBackground : MonoBehaviour
             vel.space = ParticleSystemSimulationSpace.Local;
             vel.y = new ParticleSystem.MinMaxCurve(ph * 0.06f, ph * 0.12f);
             vel.x = new ParticleSystem.MinMaxCurve(-ph * 0.01f, ph * 0.01f);
+            vel.z = new ParticleSystem.MinMaxCurve(0f, 0f);   // <- baris yang dulu hilang
 
             var colOverLife = _ps.colorOverLifetime;
             colOverLife.enabled = true;
@@ -192,6 +259,16 @@ public class BlastBackground : MonoBehaviour
         }
 
         _ready = _mat != null;
+    }
+
+    void ApplyNow()
+    {
+        // Kilau setelah clear: naikkan bagian atas gradient sedikit ke arah warna
+        // hangat, lalu biarkan surut. Halus, bukan lampu disko.
+        float b = _bloom * Mathf.Clamp01(bloomStrength);
+        Color top = Color.Lerp(_curTop, new Color(1f, 0.92f, 0.72f), b * 0.42f);
+        Color bot = Color.Lerp(_curBot, new Color(0.28f, 0.22f, 0.34f), b * 0.22f);
+        Apply(top, bot);
     }
 
     void Apply(Color top, Color bot)
