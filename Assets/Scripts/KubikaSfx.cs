@@ -1,6 +1,6 @@
 using System.Collections;
 using UnityEngine;
-using KubikaBlast; // untuk membaca status BlastCore
+using KubikaBlast;
 
 /// <summary>
 /// Procedural AUDIO untuk Kubika Blast: SFX gaya Block Blast + background music
@@ -9,15 +9,46 @@ using KubikaBlast; // untuk membaca status BlastCore
 /// >>> LANGSUNG BUNYI, TANPA EDIT KODE GAME & TANPA SETTING UNITY <<<
 /// Taruh file ini di folder "Assets" lalu tekan Play.
 ///
-/// SUARA PUJIAN:
-///   - Kalau kamu menaruh file suara di Assets/Resources/Voice/ (good, awesome,
-///     amazing, fantastic, incredible, unstoppable, legendary; .mp3/.wav/.ogg)
-///     -> otomatis dipakai suara ASLI itu.
-///   - Kalau tidak ada -> otomatis pakai sting musik yang naik tiap combo.
+/// =====================================================================
+/// KENAPA DULU SUARANYA "NABRAK" — dan apa yang diperbaiki
+/// =====================================================================
 ///
-/// STREAK: tingkat pujian pakai penghitung streak berbasis WAKTU (praiseWindow),
-/// bukan Combo bawaan game yang cepat reset. Selama clear berikutnya masih dalam
-/// praiseWindow detik, tingkatnya terus naik.
+/// (1) SATU clear memicu EMPAT hal di frame yang sama: PlayPlace, rentetan
+///     cascade, chime permata, dan suara pujian.
+///
+/// (2) Cascade-nya 24 nada x 0.06 detik = 1.44 DETIK, padahal tiap klip spark
+///     panjangnya 0.22 detik. Artinya sekitar 4 nada selalu berbunyi bersamaan
+///     sepanjang rentetan. Lebih parah: tidak ada pegangan koroutin, jadi clear
+///     kedua dalam 1.44 detik itu menumpuk cascade BARU di atas yang lama.
+///     Sekarang: maksimal 10 nada, total dikunci ~0.26 detik, dan cascade lama
+///     SELALU dihentikan sebelum yang baru dimulai.
+///
+/// (3) BIANG KERUSAKAN: PlayOn() menulis `src.pitch` sebelum tiap PlayOneShot,
+///     sementara cascade, chime permata, DAN tik palu semuanya berbagi satu
+///     AudioSource (_sparkSrc). Di Unity, mengubah AudioSource.pitch akan
+///     MENGGESER NADA SEMUA PlayOneShot yang masih berbunyi di source itu.
+///     Jadi chime permata (muncul tiap clear) atau tik palu (pitch sampai 1.75)
+///     membengkokkan nada cascade yang sedang jalan di tengah jalan. Itulah
+///     bunyi "nabrak"/sumbang, bukan sekadar ramai.
+///     Sekarang: SATU AudioSource per peran, dan _cascadeSrc pitch-nya TIDAK
+///     PERNAH disentuh siapa pun.
+///
+/// (4) Tidak ada kompensasi gain. Nada bertumpuk menjumlah lewat 1.0 lalu
+///     ter-clip keras di mixer (bunyi kresek). Sekarang tiap nada diredam
+///     1/sqrt(jumlah nada).
+///
+/// (5) Objek ini DontDestroyOnLoad tapi tidak pernah StopAllCoroutines, jadi
+///     cascade ronde sebelumnya bisa terus berbunyi di layar Home.
+///
+/// GAME OVER: semua source di-fade 120ms lalu dihentikan, baru sting game over
+/// diputar SENDIRIAN. Dulu langkah terakhir yang meng-clear sekaligus mematikan
+/// papan menghasilkan place + cascade 1.44 detik + jingle naik level + jingle
+/// game over + suara pujian, semuanya barengan.
+///
+/// SUARA PUJIAN:
+///   - Taruh file di Assets/Resources/Voice/ (good, awesome, amazing, fantastic,
+///     incredible, unstoppable, legendary; .mp3/.wav/.ogg) -> dipakai otomatis.
+///   - Kalau tidak ada -> pakai sting musik yang naik tiap tingkat combo.
 /// </summary>
 public class KubikaSfx : MonoBehaviour
 {
@@ -29,25 +60,41 @@ public class KubikaSfx : MonoBehaviour
     public bool musicEnabled = true;
 
     [Header("Pujian (announcer)")]
-    [Tooltip("Berapa detik jeda maksimum antar-clear agar streak pujian terus naik.")]
+    [Tooltip("Tidak lagi dipakai: tingkat pujian kini mengikuti BlastCore.Combo. Disimpan demi kompatibilitas scene lama.")]
     [Range(1f, 30f)] public float praiseWindow = 15f;
 
     const int SampleRate = 44100;
     const int SPARK_STEPS = 31;
 
-    AudioSource _sfx, _sparkSrc, _melodic, _voiceSrc, _music;
+    /// <summary>Nada cascade maksimum. Dulu 24 — jauh lebih panjang dari klipnya sendiri.</summary>
+    const int MAX_CASCADE_NOTES = 10;
+
+    /// <summary>Total durasi rentetan, berapa pun jumlah sel yang hancur.</summary>
+    const float CASCADE_TOTAL = 0.26f;
+
+    // ---- SATU AudioSource PER PERAN ----
+    // Ini kuncinya. Karena `pitch` bersifat per-source dan mempengaruhi suara yang
+    // MASIH berbunyi, peran yang mengubah pitch tidak boleh berbagi source dengan
+    // peran yang bunyinya panjang.
+    AudioSource _sfx;        // place / click / invalid / palu / bom (pitch boleh berubah)
+    AudioSource _cascadeSrc; // HANYA rentetan clear. pitch selalu 1. jangan disentuh.
+    AudioSource _gemSrc;     // HANYA chime permata (pitch naik per butir)
+    AudioSource _toolSrc;    // HANYA tik palu (pitch naik per blok)
+    AudioSource _melodic;    // naik level / game over
+    AudioSource _voiceSrc;   // suara pujian
+    AudioSource _music;
 
     AudioClip _place, _levelUp, _gameOver, _click, _invalid, _praise, _music_clip;
     AudioClip _hammer, _bomb, _hammerTick, _gem;
     AudioClip[] _sparks;
 
     BlastGame _game;
+    BlastGame _hookedGame;
     BlastCore _lastCore;
-    int _pScore, _pLines, _pLevel;
-    bool _pGameOver;
 
-    int _streak;
-    float _lastClearTime = -999f;
+    Coroutine _cascade;
+    bool _muted;               // true sejak game over sampai ronde berikutnya
+    float _lastGemTime = -99f;
 
     static readonly string[] VoiceKeys =
         { "good", "awesome", "amazing", "fantastic", "incredible", "unstoppable", "legendary" };
@@ -66,11 +113,13 @@ public class KubikaSfx : MonoBehaviour
         Instance = this;
         DontDestroyOnLoad(gameObject);
 
-        _sfx = NewSource();
-        _sparkSrc = NewSource();
-        _melodic = NewSource();
-        _voiceSrc = NewSource();
-        _music = NewSource();
+        _sfx        = NewSource();
+        _cascadeSrc = NewSource();
+        _gemSrc     = NewSource();
+        _toolSrc    = NewSource();
+        _melodic    = NewSource();
+        _voiceSrc   = NewSource();
+        _music      = NewSource();
         _music.loop = true;
 
         BuildClips();
@@ -80,13 +129,24 @@ public class KubikaSfx : MonoBehaviour
         if (musicEnabled) _music.Play();
     }
 
+    void OnDestroy()
+    {
+        Unhook();
+        if (Instance == this) Instance = null;
+    }
+
     AudioSource NewSource()
     {
         var s = gameObject.AddComponent<AudioSource>();
         s.playOnAwake = false;
         s.spatialBlend = 0f;
+        s.volume = 1f;
         return s;
     }
+
+    // ==================================================================
+    // ============ HOOK KE GAME (event, bukan tebak skor) ==============
+    // ==================================================================
 
     void Update()
     {
@@ -100,56 +160,189 @@ public class KubikaSfx : MonoBehaviour
         if (_game == null) _game = FindFirstObjectByType<BlastGame>();
         if (_game == null) return;
 
-        var core = _game.Core;
-        if (core == null) return;
+        if (!ReferenceEquals(_game, _hookedGame)) Hook(_game);
 
-        if (!ReferenceEquals(core, _lastCore))
+        // Core baru = ronde baru. Bersihkan sisa suara ronde lama.
+        var core = _game.Core;
+        if (core != null && !ReferenceEquals(core, _lastCore))
         {
             _lastCore = core;
-            _streak = 0;
-            _lastClearTime = -999f;
-            Prime(core);
-            return;
+            ResetForNewRound();
         }
-
-        if (core.Score > _pScore)
-        {
-            PlayPlace();
-
-            if (core.LinesCleared > _pLines)
-            {
-                // Streak berbasis waktu: lanjut naik bila masih dalam praiseWindow.
-                if (Time.time - _lastClearTime <= praiseWindow) _streak++;
-                else _streak = 1;
-                _lastClearTime = Time.time;
-
-                int cells = (core.LastClear.Cells != null) ? core.LastClear.Cells.Count : 0;
-                if (cells <= 0) cells = (core.LinesCleared - _pLines) * Mathf.Max(1, core.Columns);
-                StartCoroutine(ClearCascade(cells, _streak));
-                // Pujian (teks + suara) kini disetir tunggal oleh KubikaHud agar SINKRON.
-                // (dulu suara di sini pakai window/streak terpisah -> bisa beda dgn teks)
-            }
-
-            if (core.Level > _pLevel)
-                PlayLevelUp();
-        }
-
-        if (core.GameOver && !_pGameOver)
-            PlayGameOver();
-
-        Prime(core);
     }
 
-    void Prime(BlastCore core)
+    void Hook(BlastGame g)
     {
-        _pScore = core.Score;
-        _pLines = core.LinesCleared;
-        _pLevel = core.Level;
-        _pGameOver = core.GameOver;
+        Unhook();
+        _hookedGame = g;
+        g.OnPlaced   += HandlePlaced;
+        g.OnCleared  += HandleCleared;
+        g.OnLevelUp  += HandleLevelUp;
+        g.OnGameOver += HandleGameOver;
+        g.OnRebuilt  += ResetForNewRound;
     }
+
+    void Unhook()
+    {
+        if (_hookedGame == null) return;
+        _hookedGame.OnPlaced   -= HandlePlaced;
+        _hookedGame.OnCleared  -= HandleCleared;
+        _hookedGame.OnLevelUp  -= HandleLevelUp;
+        _hookedGame.OnGameOver -= HandleGameOver;
+        _hookedGame.OnRebuilt  -= ResetForNewRound;
+        _hookedGame = null;
+    }
+
+    void ResetForNewRound()
+    {
+        _muted = false;
+        StopCascade();
+        StopAllCoroutines();   // (5) sisa ronde lama tidak boleh ikut ke Home / ronde baru
+        HushNow();
+    }
+
+    void HandlePlaced(int cells)
+    {
+        if (_muted) return;
+        PlayPlace();
+    }
+
+    void HandleCleared(BlastCore.ClearInfo info)
+    {
+        if (_muted) return;
+
+        int cells = (info.Cells != null) ? info.Cells.Count : 0;
+        if (cells <= 0) return;
+
+        // Alat (palu/bom) punya suaranya sendiri; jangan tumpuk rentetan di atasnya.
+        if (info.FromTool) return;
+
+        StopCascade();
+        _cascade = StartCoroutine(ClearCascade(cells, Mathf.Max(1, info.Combo)));
+    }
+
+    void HandleLevelUp(int level)
+    {
+        if (_muted) return;
+        // Diberi jeda kecil supaya tidak menabrak awal rentetan clear.
+        StartCoroutine(DelayedLevelUp());
+    }
+
+    IEnumerator DelayedLevelUp()
+    {
+        yield return new WaitForSecondsRealtime(CASCADE_TOTAL + 0.06f);
+        if (_muted) yield break;
+        PlayLevelUp();
+    }
+
+    void HandleGameOver()
+    {
+        // Diam DULU, baru sting. Inilah perbaikan "suara pujian tetap muncul
+        // padahal sudah game over".
+        _muted = true;
+        StopCascade();
+        StartCoroutine(GameOverRoutine());
+    }
+
+    IEnumerator GameOverRoutine()
+    {
+        yield return StartCoroutine(FadeOutAll(0.12f));
+        yield return new WaitForSecondsRealtime(0.16f);   // satu tarikan napas
+        _melodic.volume = 1f;
+        _melodic.pitch = 1f;
+        _melodic.PlayOneShot(_gameOver, 1f * sfxVolume);
+    }
+
+    void StopCascade()
+    {
+        if (_cascade != null) { StopCoroutine(_cascade); _cascade = null; }
+    }
+
+    /// <summary>Redam semua SFX dengan halus, lalu hentikan. Musik tidak diganggu.</summary>
+    IEnumerator FadeOutAll(float dur)
+    {
+        AudioSource[] all = { _sfx, _cascadeSrc, _gemSrc, _toolSrc, _melodic, _voiceSrc };
+        float t = 0f;
+        while (t < dur)
+        {
+            float k = 1f - (t / dur);
+            foreach (var s in all) if (s != null) s.volume = k;
+            t += Time.unscaledDeltaTime;
+            yield return null;
+        }
+        foreach (var s in all)
+        {
+            if (s == null) continue;
+            s.Stop();
+            s.volume = 1f;
+            s.pitch = 1f;
+        }
+    }
+
+    void HushNow()
+    {
+        AudioSource[] all = { _sfx, _cascadeSrc, _gemSrc, _toolSrc, _melodic, _voiceSrc };
+        foreach (var s in all)
+        {
+            if (s == null) continue;
+            s.Stop();
+            s.volume = 1f;
+            s.pitch = 1f;
+        }
+    }
+
+    // ==================================================================
+    // ============ RENTETAN CLEAR ======================================
+    // ==================================================================
+
+    IEnumerator ClearCascade(int cellCount, int tier)
+    {
+        int n = Mathf.Clamp(cellCount, 1, MAX_CASCADE_NOTES);
+
+        // Total durasi DIKUNCI. Dulu durasinya ikut jumlah sel, jadi clear besar
+        // berbunyi 1.44 detik dan pasti bertabrakan dengan aksi berikutnya.
+        float delay = Mathf.Clamp(CASCADE_TOTAL / n, 0.018f, 0.05f);
+
+        const int MAX_STEP = 16;
+        int lift = Mathf.Clamp(tier - 1, 0, 4) * 2;
+        int[] penta = { 0, 2, 4, 7, 9 };
+
+        // (4) Kompensasi polifoni: makin banyak nada bersamaan, makin pelan
+        //     masing-masing, supaya jumlahnya tidak melewati 1.0 dan clipping.
+        float poly = 1f / Mathf.Sqrt(n);
+
+        var wait = new WaitForSecondsRealtime(delay);
+
+        for (int i = 0; i < n; i++)
+        {
+            if (_muted) { _cascade = null; yield break; }
+
+            int octave = (i / penta.Length) % 2;
+            int semi = Mathf.Clamp(octave * 12 + penta[i % penta.Length] + lift, 0, MAX_STEP);
+            float vol = Mathf.Lerp(0.90f, 0.50f, (float)i / Mathf.Max(1, n - 1)) * poly;
+
+            // pitch TIDAK disentuh di sini, dan tidak ada peran lain yang memakai
+            // source ini, jadi nada tak mungkin dibengkokkan di tengah jalan.
+            _cascadeSrc.PlayOneShot(_sparks[semi], vol * sfxVolume);
+            yield return wait;
+        }
+
+        if (!_muted)
+        {
+            int topIndex = Mathf.Clamp(penta[penta.Length - 1] + lift + 4, 0, MAX_STEP);
+            _cascadeSrc.PlayOneShot(_sparks[topIndex], (0.42f * poly + 0.14f) * sfxVolume);
+        }
+        _cascade = null;
+    }
+
+    // ==================================================================
+    // ============ API PUBLIK ==========================================
+    // ==================================================================
 
     public void PlayPraise(int tier)
     {
+        if (_muted) return;   // jangan pernah memuji papan yang sudah mati
+
         int i = Mathf.Clamp(tier - 1, 0, VoiceKeys.Length - 1);
         var voice = Resources.Load<AudioClip>("Voice/" + VoiceKeys[i]);
         if (voice != null)
@@ -163,35 +356,51 @@ public class KubikaSfx : MonoBehaviour
         _voiceSrc.PlayOneShot(_praise, 0.8f * sfxVolume);
     }
 
-    IEnumerator ClearCascade(int cellCount, int tier)
+    public void PlayPlace()    => PlayOn(_sfx, _place, 0.9f);
+    public void PlayClick()    => PlayOn(_sfx, _click, 0.7f);
+    public void PlayInvalid()  => PlayOn(_sfx, _invalid, 0.8f);
+    public void PlayLevelUp()  => PlayOn(_melodic, _levelUp, 1f);
+    public void PlayGameOver() => PlayOn(_melodic, _gameOver, 1f);
+    public void PlayHammer()   => PlayOn(_sfx, _hammer, 1f, Random.Range(0.96f, 1.05f));
+    public void PlayBomb()     => PlayOn(_sfx, _bomb, 1f, Random.Range(0.9f, 1.0f));
+
+    /// <summary>Tik palu. Source SENDIRI: pitch-nya naik terus, dulu ini yang
+    /// membengkokkan rentetan clear karena berbagi _sparkSrc.</summary>
+    public void PlayHammerTick(int step)
+        => PlayOn(_toolSrc, _hammerTick, 0.85f, Mathf.Min(1.6f, 1f + step * 0.05f) * Random.Range(0.98f, 1.02f));
+
+    /// <summary>Chime permata tunggal.</summary>
+    public void PlayGem() => PlayGemTick(0);
+
+    /// <summary>
+    /// Chime permata ke-<paramref name="index"/> dalam satu semburan; nadanya naik
+    /// sedikit tiap butir sehingga terdengar seperti koin yang dikumpulkan.
+    /// Dibatasi laju supaya tidak menumpuk jadi bunyi kresek.
+    /// </summary>
+    public void PlayGemTick(int index)
     {
-        int n = Mathf.Clamp(cellCount, 1, 24);
-        float delay = 0.06f;
-        if (_game != null && _game.clearStepDelay > 0f) delay = _game.clearStepDelay;
+        if (_muted) return;
+        float now = Time.unscaledTime;
+        if (now - _lastGemTime < 0.035f) return;
+        _lastGemTime = now;
 
-        // BATAS nada: cegah suara terlalu melengking saat 2-3 baris hancur sekaligus.
-        // Dulu nada memanjat oktaf terus (bisa ~4 kHz). Sekarang diplafon.
-        const int MAX_STEP = 16;                    // plafon nada (~1.3 oktaf dari dasar)
-        int lift = Mathf.Clamp(tier - 1, 0, 3) * 2; // kenaikan per-tier dibatasi
-        int[] penta = { 0, 2, 4, 7, 9 };
-        var wait = new WaitForSeconds(delay);
+        float pitch = Mathf.Min(1.9f, 1f + index * 0.055f);
+        float vol = Mathf.Lerp(0.75f, 0.42f, Mathf.Clamp01(index / 12f));
+        PlayOn(_gemSrc, _gem, vol, pitch);
+    }
 
-        for (int i = 0; i < n; i++)
-        {
-            // Oktaf hanya berselang 0/1 (tidak memanjat tanpa henti) lalu diplafon.
-            int octave = (i / penta.Length) % 2;
-            int semi = Mathf.Clamp(octave * 12 + penta[i % penta.Length] + lift, 0, MAX_STEP);
-            float vol = Mathf.Lerp(0.85f, 0.45f, (float)i / n);
-            _sparkSrc.PlayOneShot(_sparks[semi], vol * sfxVolume);
-            yield return wait;
-        }
-
-        // Sparkle penutup juga diplafon supaya tidak menusuk.
-        int topIndex = Mathf.Clamp(penta[penta.Length - 1] + lift + 4, 0, MAX_STEP);
-        _sparkSrc.PlayOneShot(_sparks[topIndex], 0.5f * sfxVolume);
+    void PlayOn(AudioSource src, AudioClip clip, float vol, float pitch = 1f)
+    {
+        if (clip == null || src == null) return;
+        if (_muted && src != _melodic) return;
+        src.pitch = pitch;
+        src.PlayOneShot(clip, vol * sfxVolume);
     }
 
     // ==================================================================
+    // ============ PEMBUATAN KLIP (procedural) =========================
+    // ==================================================================
+
     void BuildClips()
     {
         _place = MakeClip("sfx_place", 0.11f, t =>
@@ -203,18 +412,21 @@ public class KubikaSfx : MonoBehaviour
             return (body + click) * env;
         });
 
+        // Klip spark dipendekkan 0.22 -> 0.16 detik. Dengan jarak nada ~0.026 detik,
+        // tumpang-tindihnya jauh lebih pendek dan terdengar sebagai satu rentetan
+        // utuh, bukan empat nada yang saling menimpa.
         _sparks = new AudioClip[SPARK_STEPS];
         for (int s = 0; s < SPARK_STEPS; s++)
         {
             float mul = Mathf.Pow(2f, s / 12f);
             float bF = 740f * mul;
-            _sparks[s] = MakeClip("sfx_spark_" + s, 0.22f, t =>
+            _sparks[s] = MakeClip("sfx_spark_" + s, 0.16f, t =>
             {
-                float env = Mathf.Exp(-t * 12f) * (1f - Mathf.Exp(-t * 800f));
-                float body = Sine(bF, t) * 0.5f + Sine(bF * 2f, t) * 0.24f
-                           + Sine(bF * 3f, t) * 0.10f + Tri(bF, t) * 0.08f;
+                float env = Mathf.Exp(-t * 17f) * (1f - Mathf.Exp(-t * 900f));
+                float body = Sine(bF, t) * 0.5f + Sine(bF * 2f, t) * 0.22f
+                           + Sine(bF * 3f, t) * 0.09f + Tri(bF, t) * 0.07f;
                 float vib = Mathf.Sin(2f * Mathf.PI * 16f * t) * 18f;
-                float shimmer = Sine(bF * 4f + vib, t) * 0.07f * Mathf.Exp(-t * 10f);
+                float shimmer = Sine(bF * 4f + vib, t) * 0.06f * Mathf.Exp(-t * 12f);
                 return (body + shimmer) * env;
             });
         }
@@ -236,12 +448,25 @@ public class KubikaSfx : MonoBehaviour
                 * Mathf.Exp(-lt * 9f) * (1f - Mathf.Exp(-lt * 400f))) * 0.75f;
         });
 
-        _gameOver = MakeClip("sfx_gameover", 0.9f, t =>
+        // Game over dibuat lebih hangat & panjang: bukan hukuman, tapi penutup yang
+        // menghormati usaha pemain. Turun lembut lalu berhenti di akor mayor.
+        _gameOver = MakeClip("sfx_gameover", 1.35f, t =>
         {
-            float[] f = { 523f, 440f, 349f, 262f };
-            return Seq(t, f, 0.22f, (freq, lt) =>
-                (Tri(freq, lt) * 0.5f + Sine(freq, lt) * 0.3f + Square(freq, lt) * 0.08f)
-                * Mathf.Exp(-lt * 5.5f)) * 0.6f;
+            float[] f = { 659f, 523f, 440f, 349f };
+            float fall = Seq(t, f, 0.19f, (freq, lt) =>
+                (Sine(freq, lt) * 0.5f + Tri(freq, lt) * 0.22f + Sine(freq * 2f, lt) * 0.1f)
+                * Mathf.Exp(-lt * 4.2f));
+
+            // Akor penutup C mayor yang menenangkan, mulai ~0.76 detik.
+            float ct = Mathf.Max(0f, t - 0.76f);
+            float chord = 0f;
+            if (t > 0.76f)
+            {
+                float env = Mathf.Exp(-ct * 2.2f) * (1f - Mathf.Exp(-ct * 60f));
+                chord = (Sine(262f, ct) * 0.34f + Sine(330f, ct) * 0.26f
+                       + Sine(392f, ct) * 0.22f + Sine(523f, ct) * 0.16f) * env;
+            }
+            return (fall * 0.55f + chord * 0.75f);
         });
 
         _click = MakeClip("sfx_click", 0.06f, t => Sine(1300f, t) * Mathf.Exp(-t * 60f) * 0.5f);
@@ -259,7 +484,7 @@ public class KubikaSfx : MonoBehaviour
             float whoEnv = Mathf.Exp(-t * 26f) * Mathf.Clamp01(t / 0.012f);
             float whoosh = (Random.value * 2f - 1f) * whoEnv * 0.22f;
 
-            float ti = Mathf.Max(0f, t - 0.03f);            // benturan mulai ~0.03s
+            float ti = Mathf.Max(0f, t - 0.03f);
             float hit = 1f - Mathf.Exp(-ti * 700f);
 
             float thud = Sine(Mathf.Lerp(240f, 70f, Mathf.Clamp01(ti / 0.06f)), ti) * Mathf.Exp(-ti * 24f) * 0.95f;
@@ -269,10 +494,9 @@ public class KubikaSfx : MonoBehaviour
             float crackle = (Random.value * 2f - 1f) * Mathf.Exp(-ti * 12f) * 0.3f * grain;
 
             float mix = whoosh + (thud + sub + clank + crackle) * hit;
-            return (float)System.Math.Tanh(mix * 1.1f);        // soft-clip biar tebal, tak harsh
+            return (float)System.Math.Tanh(mix * 1.1f);
         });
 
-        // PALU (tik per-block): pukulan pendek & tajam untuk hancur satu-per-satu.
         _hammerTick = MakeClip("sfx_hammer_tick", 0.13f, t =>
         {
             float hit = 1f - Mathf.Exp(-t * 900f);
@@ -283,7 +507,6 @@ public class KubikaSfx : MonoBehaviour
             return (float)System.Math.Tanh(mix * 1.15f);
         });
 
-        // BOM: dentuman sub-bass + body ledakan + crackle transien + debris bergema.
         _bomb = MakeClip("sfx_bomb", 0.75f, t =>
         {
             float hit = 1f - Mathf.Exp(-t * 500f);
@@ -296,36 +519,20 @@ public class KubikaSfx : MonoBehaviour
             float debris = (Random.value * 2f - 1f) * Mathf.Exp(-t * 3.2f) * 0.2f * grain;
 
             float mix = (boom + sub + body + crack + debris) * hit;
-            return (float)System.Math.Tanh(mix * 1.2f);        // soft-clip -> ledakan fat & hangat
+            return (float)System.Math.Tanh(mix * 1.2f);
         });
 
-        _gem = MakeClip("sfx_gem", 0.34f, t =>
+        // Chime permata dibuat lebih pendek & bening supaya enak diulang per butir.
+        _gem = MakeClip("sfx_gem", 0.24f, t =>
         {
-            float[] f = { 784f, 1047f, 1319f };
-            float arp = Seq(t, f, 0.07f, (freq, lt) =>
-                (Sine(freq, lt) * 0.5f + Sine(freq * 2f, lt) * 0.22f) * Mathf.Exp(-lt * 11f));
-            float shimmer = Sine(2093f, t) * 0.12f * Mathf.Exp(-t * 8f);
+            float[] f = { 1047f, 1319f };
+            float arp = Seq(t, f, 0.055f, (freq, lt) =>
+                (Sine(freq, lt) * 0.5f + Sine(freq * 2f, lt) * 0.18f) * Mathf.Exp(-lt * 16f));
+            float shimmer = Sine(2093f, t) * 0.10f * Mathf.Exp(-t * 12f);
             return arp + shimmer;
         });
 
         _music_clip = BuildMusic();
-    }
-
-    public void PlayPlace()   => PlayOn(_sfx, _place, 0.9f);
-    public void PlayClick()   => PlayOn(_sfx, _click, 0.7f);
-    public void PlayInvalid() => PlayOn(_sfx, _invalid, 0.8f);
-    public void PlayLevelUp() => PlayOn(_melodic, _levelUp, 1f);
-    public void PlayGameOver()=> PlayOn(_melodic, _gameOver, 1f);
-    public void PlayHammer()  => PlayOn(_sfx, _hammer, 1f, Random.Range(0.96f, 1.05f));
-    public void PlayHammerTick(int step) => PlayOn(_sparkSrc, _hammerTick, 0.9f, Mathf.Min(1.75f, 1f + step * 0.05f) * Random.Range(0.98f, 1.02f));
-    public void PlayBomb()    => PlayOn(_sfx, _bomb, 1f, Random.Range(0.9f, 1.0f));
-    public void PlayGem()     => PlayOn(_sparkSrc, _gem, 0.9f);
-
-    void PlayOn(AudioSource src, AudioClip clip, float vol, float pitch = 1f)
-    {
-        if (clip == null || src == null) return;
-        src.pitch = pitch;
-        src.PlayOneShot(clip, vol * sfxVolume);
     }
 
     AudioClip BuildMusic()
