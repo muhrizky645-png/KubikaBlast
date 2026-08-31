@@ -9,7 +9,7 @@ using KubikaBlast;
 /// >>> TANPA EDIT KODE GAME & TANPA SETTING UNITY <<<
 /// Taruh file ini di folder "Assets", tekan Play.
 ///
-/// DUA PERBAIKAN BESAR:
+/// TIGA PERBAIKAN BESAR:
 ///
 /// 1. PUJIAN SETELAH GAME OVER.
 ///    DetectClear() dulu sama sekali tidak memeriksa core.GameOver. Penempatan
@@ -23,15 +23,20 @@ using KubikaBlast;
 ///    Dulu ada tiga: BlastCore.Combo (membayar skor & permata), KubikaHud._streak
 ///    (timer 10 detik, mengendalikan teks & tingkat pujian), dan KubikaSfx._streak
 ///    (timer 15 detik, mengendalikan nada). Ketiganya bisa menunjukkan angka yang
-///    berbeda pada saat yang sama. Sekarang semuanya membaca BlastCore.Combo.
-///    Bar kuning tidak lagi menghitung mundur waktu tak-terlihat; ia menunjukkan
-///    seberapa dekat combo ke pengali maksimum.
+///    berbeda pada saat yang sama. Sekarang semuanya membaca BlastCore.Combo —
+///    termasuk jendela 10 detiknya, yang sekarang tinggal di BlastCore.
+///
+/// 3. PUJIAN MULAI DARI CLEAR KEDUA.
+///    Tingkat pujian = Combo - 1. Clear pertama dalam satu rantai sengaja DIAM,
+///    clear kedua baru "GOOD!", ketiga "AWESOME!!", dan seterusnya. Ini konsep
+///    aslinya: pujian adalah hadiah untuk MERANGKAI clear, bukan untuk satu clear
+///    biasa yang terjadi puluhan kali tiap ronde.
 /// </summary>
 public class KubikaHud : MonoBehaviour
 {
     public static KubikaHud Instance { get; private set; }
 
-    [Tooltip("Tidak lagi dipakai untuk combo (combo kini milik BlastCore). Disimpan demi kompatibilitas scene lama.")]
+    [Tooltip("Tidak lagi dipakai. Jendela combo yang asli ada di BlastCore.COMBO_WINDOW. Disimpan demi kompatibilitas scene lama.")]
     [Range(1f, 30f)] public float comboWindow = 10f;
 
     BlastGame _game;
@@ -147,9 +152,11 @@ public class KubikaHud : MonoBehaviour
     {
         if (core.LinesCleared > _lastLines)
         {
-            // Tingkat pujian = combo ASLI dari BlastCore, angka yang sama yang
-            // membayar skor & permata. Tidak ada lagi penghitung bayangan.
-            ShowPraise(core.Combo);
+            // Tingkat pujian = combo ASLI dari BlastCore dikurangi satu, angka yang
+            // sama yang membayar skor & permata. Clear PERTAMA dalam satu rantai
+            // sengaja diam; combo 2 -> "GOOD!", combo 3 -> "AWESOME!!", dst.
+            int tier = core.Combo - 1;
+            if (tier >= 1) ShowPraise(tier);
         }
         _lastLines = core.LinesCleared;
     }
@@ -159,6 +166,7 @@ public class KubikaHud : MonoBehaviour
         if (_comboBox == null) return;
 
         int combo = core.Combo;
+        // Muncul mulai combo 2 — saat yang sama pujian pertama ("GOOD!") tampil.
         bool show = combo >= 2;
         if (_comboBox.gameObject.activeSelf != show) _comboBox.gameObject.SetActive(show);
         if (!show) { _shownCombo = combo; return; }
@@ -171,18 +179,25 @@ public class KubikaHud : MonoBehaviour
             _shownCombo = combo;
         }
 
-        // Bar kuning = seberapa dekat ke pengali maksimum (bukan timer tak-terlihat).
-        float fillFrac = Mathf.Clamp01((float)combo / BlastCore.COMBO_CAP);
+        // Bar kuning = SISA WAKTU jendela combo, bukan combo/cap. Sekarang bar ini
+        // informasi yang benar-benar berguna: kalau habis, rantainya putus. Dulu bar
+        // menunjukkan kemajuan pengali sementara timer aslinya tak terlihat sama
+        // sekali, jadi pemain tidak pernah tahu kapan harus buru-buru.
+        float fillFrac = Mathf.Clamp01(core.ComboFraction);
         var sd = _comboFill.sizeDelta;
         sd.x = _comboBarWidth * fillFrac;
         _comboFill.sizeDelta = sd;
 
-        // Bar berubah warna saat pengali mentok — hadiah visual kecil.
         var fillImg = _comboFill.GetComponent<Image>();
         if (fillImg != null)
-            fillImg.color = combo >= BlastCore.COMBO_CAP
-                ? new Color(1f, 0.45f, 0.75f)
-                : new Color(1f, 0.82f, 0.15f);
+        {
+            if (fillFrac <= 0.28f)
+                fillImg.color = new Color(1f, 0.35f, 0.30f);   // hampir putus
+            else if (combo >= BlastCore.COMBO_CAP)
+                fillImg.color = new Color(1f, 0.45f, 0.75f);   // pengali sudah mentok
+            else
+                fillImg.color = new Color(1f, 0.82f, 0.15f);
+        }
 
         _comboPop = Mathf.MoveTowards(_comboPop, 0f, Time.unscaledDeltaTime * 3f);
         float s = 1f + 0.5f * _comboPop;
