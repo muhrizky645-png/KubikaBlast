@@ -38,6 +38,8 @@ public class KubikaMenu : MonoBehaviour
     enum UIScreen { Home, Playing, Paused, Settings, GameOver }
     UIScreen _screen = UIScreen.Home;
     UIScreen _settingsReturn = UIScreen.Home;
+    // Dibaca KubikaItems untuk tahu kapan menampilkan tombol TOKO (Home/Jeda).
+    public static string CurrentScreenName = "Home";
 
     const string LB_KEY = "kubika_leaderboard";
     const string MUSIC_KEY = "kubika_music_vol";
@@ -107,6 +109,14 @@ public class KubikaMenu : MonoBehaviour
         if (_input == null) _input = FindFirstObjectByType<BlastInput>();
         var core = _game != null ? _game.Core : null;
 
+        // Jaring pengaman: saat status BERMAIN, pastikan waktu berjalan & input game
+        // aktif. Mencegah game "stuck tak bisa dipencet" bila ada yang mematikannya.
+        if (_screen == UIScreen.Playing && (core == null || !core.GameOver))
+        {
+            if (Time.timeScale != 1f) Time.timeScale = 1f;
+            if (_input != null && !_input.enabled) _input.enabled = true;
+        }
+
         var sfx = KubikaSfx.Instance;
         if (sfx != null)
         {
@@ -168,6 +178,7 @@ public class KubikaMenu : MonoBehaviour
     void SetState(UIScreen s)
     {
         _screen = s;
+        CurrentScreenName = s.ToString();
         if (_homePanel != null) _homePanel.SetActive(s == UIScreen.Home);
         if (_pausePanel != null) _pausePanel.SetActive(s == UIScreen.Paused);
         if (_settingsPanel != null) _settingsPanel.SetActive(s == UIScreen.Settings);
@@ -183,10 +194,15 @@ public class KubikaMenu : MonoBehaviour
         if (_input != null) _input.enabled = (s == UIScreen.Playing);
     }
 
+    bool _everStarted;
     void StartGame()
     {
         SetState(UIScreen.Playing);
-        if (_game != null) _game.Rebuild();
+        // Papan sudah dibangun FRESH oleh BlastGame.Start() saat boot. Kalau MAIN
+        // pertama Rebuild lagi, Core baru dibuat & balapan dgn gambar tray 2D
+        // (kadang cuma tabung yang muncul). Jadi Rebuild HANYA saat main ulang.
+        if (_everStarted && _game != null) _game.Rebuild();
+        _everStarted = true;
         _prevGameOver = false;
     }
 
