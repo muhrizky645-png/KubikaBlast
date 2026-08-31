@@ -4,6 +4,7 @@
 #define USE_NEW_INPUT
 #endif
 
+using System.Collections;
 using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
@@ -20,12 +21,14 @@ using KubikaBlast;
 ///
 /// Tema: ceria & warna-warni, dengan BACKGROUND ANIMASI (kotak-kotak warni
 /// melayang) di semua layar menu.
-///  - HOME: judul + dekorasi + kartu TOP 5 (langsung tampil, tanpa tombol
-///    leaderboard) + tombol MAIN & PENGATURAN.
-///  - PENGATURAN: kartu berisi slider MUSIK, SFX, KELANCARAN (FPS).
-///  - GAME OVER: layar custom (menutupi panel bawaan) dengan skor & skor
-///    terbaik + MAIN LAGI & MENU UTAMA.
-///  - Tombol JEDA saat main -> panel jeda.
+///
+/// LAYAR GAME OVER (dirombak):
+///   Dulu kartunya menumpahkan semuanya dalam satu frame — skor, skor terbaik,
+///   dua tombol, selesai. Tidak ada yang menghargai usaha pemain.
+///   Sekarang muncul BERTAHAP di waktu unscaled (layar ini jalan di timeScale 0):
+///   judul -> kalimat motivasi -> skor berhitung naik -> NEW RECORD / skor
+///   terbaik -> statistik ronde -> tombol. Ronde yang berakhir cepat pun tetap
+///   punya sesuatu untuk ditunjukkan.
 ///
 /// Semua tap dideteksi manual (tanpa EventSystem). Saat menu/jeda terbuka:
 /// Time.timeScale = 0 dan BlastInput dimatikan. Animasi background pakai
@@ -34,6 +37,48 @@ using KubikaBlast;
 public class KubikaMenu : MonoBehaviour
 {
     public static KubikaMenu Instance { get; private set; }
+
+    // =================================================================
+    // KALIMAT MOTIVASI GAME OVER
+    // Silakan ganti/tambah sesukamu. Dipilih acak dari kolam yang sesuai
+    // dengan hasil ronde. Satu baris = satu kalimat.
+    // =================================================================
+
+    /// <summary>Dipakai saat pemain memecahkan rekor pribadinya.</summary>
+    static readonly string[] MotivationRecord =
+    {
+        "A brand new record. That was your best run yet.",
+        "You just beat yourself, and that is the hardest opponent there is.",
+        "New personal best. Everything clicked this time.",
+        "Record broken. All that practice finally showed up.",
+    };
+
+    /// <summary>Ronde kuat: mendekati rekor, atau banyak baris hancur.</summary>
+    static readonly string[] MotivationStrong =
+    {
+        "So close to your best. One more run and it is yours.",
+        "That was a strong run. You read the board well.",
+        "You kept that board alive far longer than it wanted to stay.",
+        "You are getting sharper every single round.",
+    };
+
+    /// <summary>Ronde biasa yang sehat.</summary>
+    static readonly string[] MotivationSolid =
+    {
+        "Good run. Every board teaches you something new.",
+        "Nice work out there. The next one will go further.",
+        "Solid effort. The momentum is building.",
+        "You held it together under pressure. That counts.",
+    };
+
+    /// <summary>Ronde pendek / papan yang memang jahat.</summary>
+    static readonly string[] MotivationShort =
+    {
+        "Rough board. That one was stacked against you.",
+        "Shake it off. The next board is a clean slate.",
+        "Every expert lost this board a hundred times first.",
+        "Short run, no problem. Go again.",
+    };
 
     enum UIScreen { Home, Playing, Paused, Settings, GameOver }
     UIScreen _screen = UIScreen.Home;
@@ -78,6 +123,13 @@ public class KubikaMenu : MonoBehaviour
     RectTransform _musicBar, _sfxBar, _fpsBar, _musicFill, _sfxFill, _fpsFill;
     Text _musicPct, _sfxPct, _fpsPct, _homeTop5, _goScore, _goBest;
 
+    // Game over: elemen baru + grup untuk fade bertahap.
+    Text _goTitle, _goMotivation, _goRecord, _goStats;
+    RectTransform _goTitleRT, _goScoreRT, _goRecordRT;
+    CanvasGroup _cgTitle, _cgMotivation, _cgScore, _cgRecord, _cgStats, _cgButtons;
+    RectTransform _goButtonsRoot;
+    Coroutine _reveal;
+
     float _sliderWidth = 640f;
     float _musicVal = 0.32f, _sfxVal = 0.8f, _fpsVal = 1f / 3f;
     bool _dragMusic, _dragSfx, _dragFps;
@@ -110,10 +162,15 @@ public class KubikaMenu : MonoBehaviour
         var core = _game != null ? _game.Core : null;
 
         // Jaring pengaman: saat status BERMAIN, pastikan waktu berjalan & input game
-        // aktif. Mencegah game "stuck tak bisa dipencet" bila ada yang mematikannya.
+        // aktif, supaya game tidak pernah "stuck tak bisa dipencet".
+        //
+        // DULU baris ini menyetel Time.timeScale = 1 SETIAP FRAME tanpa syarat, jadi
+        // hit-stop (jeda dramatis 60-80 ms saat clear besar) selalu dibatalkan dalam
+        // satu frame — efeknya tidak pernah benar-benar terasa. Sekarang jaring ini
+        // mengalah selama hit-stop berjalan, tapi tetap memulihkan papan sesudahnya.
         if (_screen == UIScreen.Playing && (core == null || !core.GameOver))
         {
-            if (Time.timeScale != 1f) Time.timeScale = 1f;
+            if (!BlastGame.HitStopActive && Time.timeScale != 1f) Time.timeScale = 1f;
             if (_input != null && !_input.enabled) _input.enabled = true;
         }
 
@@ -136,8 +193,11 @@ public class KubikaMenu : MonoBehaviour
         {
             if (core.GameOver && !_prevGameOver && _screen == UIScreen.Playing)
             {
+                // Ambil rekor SEBELUM skor ini dicatat, supaya "NEW RECORD" akurat.
+                var before = LoadScores();
+                int bestBefore = (before.Count > 0) ? before[0] : 0;
                 RecordScore(core.Score);
-                ShowGameOver(core.Score);
+                ShowGameOver(core, bestBefore);
             }
             _prevGameOver = core.GameOver;
         }
@@ -167,6 +227,8 @@ public class KubikaMenu : MonoBehaviour
                     if (Hit(_btnBackSettings, p)) BackFromSettings();
                     break;
                 case UIScreen.GameOver:
+                    // Tap di mana saja mempercepat animasi — jangan paksa pemain menunggu.
+                    if (_reveal != null && !Hit(_goRestart, p) && !Hit(_goHome, p)) { SkipReveal(); break; }
                     if (Hit(_goRestart, p)) StartGame();
                     else if (Hit(_goHome, p)) GoHome();
                     break;
@@ -190,6 +252,8 @@ public class KubikaMenu : MonoBehaviour
 
         if (s == UIScreen.Home) RefreshHome();
 
+        if (s != UIScreen.GameOver) StopReveal();
+
         Time.timeScale = (s == UIScreen.Playing) ? 1f : 0f;
         if (_input != null) _input.enabled = (s == UIScreen.Playing);
     }
@@ -197,6 +261,7 @@ public class KubikaMenu : MonoBehaviour
     bool _everStarted;
     void StartGame()
     {
+        StopReveal();
         SetState(UIScreen.Playing);
         // Papan sudah dibangun FRESH oleh BlastGame.Start() saat boot. Kalau MAIN
         // pertama Rebuild lagi, Core baru dibuat & balapan dgn gambar tray 2D
@@ -212,16 +277,204 @@ public class KubikaMenu : MonoBehaviour
     void ShowSettings(UIScreen ret) { _settingsReturn = ret; SetState(UIScreen.Settings); }
     void BackFromSettings() { SetState(_settingsReturn); }
 
-    void ShowGameOver(int score)
+    // ===================== GAME OVER =====================
+
+    void ShowGameOver(BlastCore core, int bestBefore)
     {
-        if (_goScore != null) _goScore.text = score.ToString();
-        var list = LoadScores();
-        int best = (list.Count > 0) ? list[0] : score;
-        if (_goBest != null) _goBest.text = "Skor terbaik: " + best;
+        int score = core.Score;
+        int best = Mathf.Max(bestBefore, score);
+        bool isRecord = score > 0 && score > bestBefore;
+
+        if (_goScore != null) _goScore.text = "0";
+        if (_goBest != null) _goBest.text = "Best  " + best;
+
+        if (_goStats != null)
+        {
+            var sb = new StringBuilder();
+            sb.Append("Lines cleared").Append("        ").Append(core.LinesCleared).Append('\n');
+            sb.Append("Gems earned").Append("         ").Append(core.GemsEarned).Append('\n');
+            sb.Append("Best combo").Append("           x").Append(Mathf.Max(1, core.BestCombo)).Append('\n');
+            sb.Append("Pieces placed").Append("       ").Append(core.PiecesPlaced);
+            _goStats.text = sb.ToString();
+        }
+
+        if (_goMotivation != null)
+            _goMotivation.text = PickMotivation(core, bestBefore, isRecord);
+
+        if (_goRecord != null)
+        {
+            _goRecord.text = isRecord ? "NEW RECORD!" : ("Best  " + best);
+            _goRecord.color = isRecord ? new Color(1f, 0.84f, 0.31f) : Color.white;
+            _goRecord.fontSize = isRecord ? 76 : 48;
+        }
+
         SetState(UIScreen.GameOver);
+
+        StopReveal();
+        _reveal = StartCoroutine(RevealRoutine(score, isRecord));
     }
 
-    // ===================== FPS / KELANCARAN =====================
+    string PickMotivation(BlastCore core, int bestBefore, bool isRecord)
+    {
+        if (isRecord) return Pick(MotivationRecord);
+
+        int lines = core.LinesCleared;
+        float ratio = (bestBefore > 0) ? (float)core.Score / bestBefore : 1f;
+
+        if (ratio >= 0.75f || lines >= 30) return Pick(MotivationStrong);
+        if (ratio >= 0.35f || lines >= 12) return Pick(MotivationSolid);
+        return Pick(MotivationShort);
+    }
+
+    static string Pick(string[] pool)
+    {
+        if (pool == null || pool.Length == 0) return "";
+        return pool[Random.Range(0, pool.Length)];
+    }
+
+    void StopReveal()
+    {
+        if (_reveal != null) { StopCoroutine(_reveal); _reveal = null; }
+    }
+
+    /// <summary>Tampilkan semuanya seketika (pemain menge-tap untuk melewati).</summary>
+    void SkipReveal()
+    {
+        StopReveal();
+        SetCG(_cgTitle, 1f); SetCG(_cgMotivation, 1f); SetCG(_cgScore, 1f);
+        SetCG(_cgRecord, 1f); SetCG(_cgStats, 1f); SetCG(_cgButtons, 1f);
+        if (_goScore != null && _game != null && _game.Core != null)
+            _goScore.text = _game.Core.Score.ToString();
+        if (_goTitleRT != null) _goTitleRT.localScale = Vector3.one;
+        if (_goScoreRT != null) _goScoreRT.localScale = Vector3.one;
+        if (_goRecordRT != null) _goRecordRT.localScale = Vector3.one;
+    }
+
+    IEnumerator RevealRoutine(int score, bool isRecord)
+    {
+        // Semua tersembunyi dulu.
+        SetCG(_cgTitle, 0f); SetCG(_cgMotivation, 0f); SetCG(_cgScore, 0f);
+        SetCG(_cgRecord, 0f); SetCG(_cgStats, 0f); SetCG(_cgButtons, 0f);
+        if (_goTitleRT != null) _goTitleRT.localScale = Vector3.one * 0.8f;
+        if (_goRecordRT != null) _goRecordRT.localScale = Vector3.one * 0.6f;
+        if (_goScoreRT != null) _goScoreRT.localScale = Vector3.one;
+
+        yield return Wait(0.18f);
+
+        // 1) Judul: pop masuk.
+        yield return Pop(_cgTitle, _goTitleRT, 0.28f, 0.8f, 1f);
+
+        // 2) Kalimat motivasi.
+        yield return Fade(_cgMotivation, 0.30f);
+        yield return Wait(0.14f);
+
+        // 3) Skor berhitung naik.
+        SetCG(_cgScore, 1f);
+        yield return CountUp(score, 0.85f);
+        yield return Punch(_goScoreRT, 0.22f, 1.14f);
+
+        // 4) NEW RECORD / skor terbaik.
+        yield return Wait(0.08f);
+        if (isRecord)
+        {
+            if (KubikaSfx.Instance != null) KubikaSfx.Instance.PlayLevelUp();
+            yield return Pop(_cgRecord, _goRecordRT, 0.34f, 0.6f, 1f);
+        }
+        else
+        {
+            if (_goRecordRT != null) _goRecordRT.localScale = Vector3.one;
+            yield return Fade(_cgRecord, 0.26f);
+        }
+
+        // 5) Statistik ronde.
+        yield return Wait(0.06f);
+        yield return Fade(_cgStats, 0.30f);
+
+        // 6) Tombol.
+        yield return Wait(0.06f);
+        yield return Fade(_cgButtons, 0.26f);
+
+        _reveal = null;
+    }
+
+    // --- Primitif animasi (semuanya unscaled: layar ini jalan di timeScale 0) ---
+
+    static IEnumerator Wait(float s)
+    {
+        float t = 0f;
+        while (t < s) { t += Time.unscaledDeltaTime; yield return null; }
+    }
+
+    IEnumerator Fade(CanvasGroup cg, float dur)
+    {
+        if (cg == null) yield break;
+        float t = 0f;
+        while (t < dur)
+        {
+            cg.alpha = Mathf.Clamp01(t / dur);
+            t += Time.unscaledDeltaTime;
+            yield return null;
+        }
+        cg.alpha = 1f;
+    }
+
+    IEnumerator Pop(CanvasGroup cg, RectTransform rt, float dur, float from, float to)
+    {
+        float t = 0f;
+        while (t < dur)
+        {
+            float k = t / dur;
+            if (cg != null) cg.alpha = Mathf.Clamp01(k * 2.2f);
+            if (rt != null)
+            {
+                // overshoot kecil supaya terasa "hidup"
+                float s = k < 0.65f ? Mathf.Lerp(from, to * 1.12f, k / 0.65f)
+                                    : Mathf.Lerp(to * 1.12f, to, (k - 0.65f) / 0.35f);
+                rt.localScale = Vector3.one * s;
+            }
+            t += Time.unscaledDeltaTime;
+            yield return null;
+        }
+        if (cg != null) cg.alpha = 1f;
+        if (rt != null) rt.localScale = Vector3.one * to;
+    }
+
+    IEnumerator Punch(RectTransform rt, float dur, float peak)
+    {
+        if (rt == null) yield break;
+        float t = 0f;
+        while (t < dur)
+        {
+            float k = t / dur;
+            float s = k < 0.4f ? Mathf.Lerp(1f, peak, k / 0.4f)
+                               : Mathf.Lerp(peak, 1f, (k - 0.4f) / 0.6f);
+            rt.localScale = Vector3.one * s;
+            t += Time.unscaledDeltaTime;
+            yield return null;
+        }
+        rt.localScale = Vector3.one;
+    }
+
+    IEnumerator CountUp(int target, float dur)
+    {
+        if (_goScore == null) yield break;
+        if (target <= 0) { _goScore.text = "0"; yield break; }
+
+        float t = 0f;
+        while (t < dur)
+        {
+            float k = t / dur;
+            float ease = 1f - Mathf.Pow(1f - k, 3f);   // cepat di awal, melambat di akhir
+            _goScore.text = Mathf.RoundToInt(target * ease).ToString();
+            t += Time.unscaledDeltaTime;
+            yield return null;
+        }
+        _goScore.text = target.ToString();
+    }
+
+    static void SetCG(CanvasGroup cg, float a) { if (cg != null) cg.alpha = a; }
+
+    // ===================== FPS / SMOOTHNESS =====================
     int FpsFromFrac(float f)
     {
         int i = Mathf.Clamp(Mathf.RoundToInt(f * (FPS_OPTS.Length - 1)), 0, FPS_OPTS.Length - 1);
@@ -320,7 +573,7 @@ public class KubikaMenu : MonoBehaviour
     {
         if (_homeTop5 == null) return;
         var list = LoadScores();
-        if (list.Count == 0) { _homeTop5.text = "Belum ada skor.\nAyo main dulu!"; return; }
+        if (list.Count == 0) { _homeTop5.text = "No scores yet.\nPlay your first round!"; return; }
         int n = Mathf.Min(5, list.Count);
         var sb = new StringBuilder();
         for (int i = 0; i < n; i++)
@@ -450,9 +703,9 @@ public class KubikaMenu : MonoBehaviour
         _homeTop5 = MakeText("Top5List", card, 58, TextAnchor.UpperCenter, FontStyle.Bold, Color.white);
         Place(_homeTop5.rectTransform, C, new Vector2(0, 150), new Vector2(700, 420));
 
-        _btnMain = MakeButton(root, "MAIN", new Vector2(0, -560), new Vector2(620, 180),
+        _btnMain = MakeButton(root, "PLAY", new Vector2(0, -560), new Vector2(620, 180),
             new Color(0.30f, 0.75f, 0.40f), 84);
-        _btnSettingsHome = MakeButton(root, "PENGATURAN", new Vector2(0, -790), new Vector2(620, 150),
+        _btnSettingsHome = MakeButton(root, "SETTINGS", new Vector2(0, -790), new Vector2(620, 150),
             new Color(0.45f, 0.47f, 0.55f), 58);
     }
 
@@ -465,14 +718,14 @@ public class KubikaMenu : MonoBehaviour
         var card = MakeCard(root, new Vector2(0, 40), new Vector2(760, 840), new Color(0.11f, 0.12f, 0.22f, 0.96f));
         MakeDecoRow(card, new Vector2(0, 300));
         var title = MakeText("Title", card, 100, TextAnchor.MiddleCenter, FontStyle.Bold, Color.white);
-        title.text = "JEDA";
+        title.text = "PAUSED";
         Place(title.rectTransform, C, new Vector2(0, 180), new Vector2(700, 160));
 
-        _btnResume = MakeButton(card, "LANJUT", new Vector2(0, 20), new Vector2(600, 160),
+        _btnResume = MakeButton(card, "RESUME", new Vector2(0, 20), new Vector2(600, 160),
             new Color(0.30f, 0.75f, 0.40f), 76);
-        _btnSettingsPause = MakeButton(card, "PENGATURAN", new Vector2(0, -170), new Vector2(600, 140),
+        _btnSettingsPause = MakeButton(card, "SETTINGS", new Vector2(0, -170), new Vector2(600, 140),
             new Color(0.30f, 0.55f, 0.95f), 56);
-        _btnHome = MakeButton(card, "MENU UTAMA", new Vector2(0, -340), new Vector2(600, 140),
+        _btnHome = MakeButton(card, "MAIN MENU", new Vector2(0, -340), new Vector2(600, 140),
             new Color(0.55f, 0.35f, 0.35f), 56);
     }
 
@@ -485,21 +738,21 @@ public class KubikaMenu : MonoBehaviour
         var card = MakeCard(root, new Vector2(0, 40), new Vector2(920, 1560), new Color(0.10f, 0.12f, 0.20f, 0.94f));
         MakeDecoRow(card, new Vector2(0, 640));
         var title = MakeText("Title", card, 84, TextAnchor.MiddleCenter, FontStyle.Bold, Color.white);
-        title.text = "PENGATURAN";
+        title.text = "SETTINGS";
         Place(title.rectTransform, C, new Vector2(0, 520), new Vector2(860, 140));
 
-        BuildSlider(card, "MUSIK", 300, new Color(0.30f, 0.80f, 0.45f),
+        BuildSlider(card, "MUSIC", 300, new Color(0.30f, 0.80f, 0.45f),
             out _musicBar, out _musicFill, out _musicPct);
         BuildSlider(card, "SFX", 90, new Color(1.00f, 0.72f, 0.30f),
             out _sfxBar, out _sfxFill, out _sfxPct);
-        BuildSlider(card, "KELANCARAN", -120, new Color(0.31f, 0.76f, 0.97f),
+        BuildSlider(card, "SMOOTHNESS", -120, new Color(0.31f, 0.76f, 0.97f),
             out _fpsBar, out _fpsFill, out _fpsPct);
 
         var hint = MakeText("Hint", card, 36, TextAnchor.MiddleCenter, FontStyle.Normal, new Color(0.72f, 0.77f, 0.88f));
-        hint.text = "FPS lebih tinggi = lebih mulus (kurangi bila HP panas/lag)";
+        hint.text = "Higher FPS is smoother. Lower it if your phone gets hot or laggy.";
         Place(hint.rectTransform, C, new Vector2(0, -250), new Vector2(860, 80));
 
-        _btnBackSettings = MakeButton(card, "KEMBALI", new Vector2(0, -560), new Vector2(520, 150),
+        _btnBackSettings = MakeButton(card, "BACK", new Vector2(0, -560), new Vector2(520, 150),
             new Color(0.45f, 0.47f, 0.55f), 62);
     }
 
@@ -526,34 +779,66 @@ public class KubikaMenu : MonoBehaviour
         fill.sizeDelta = new Vector2(_sliderWidth * 0.5f, 0f);
     }
 
-    // ---- GAME OVER (custom) ----
+    // ---- GAME OVER (custom, muncul bertahap) ----
     void BuildGameOver()
     {
         _goPanel = MakePanel("GameOverPanel", new Color(0f, 0f, 0f, 0f));
         var root = _goPanel.transform;
 
-        var card = MakeCard(root, new Vector2(0, 60), new Vector2(880, 1160), new Color(0.12f, 0.10f, 0.22f, 0.95f));
-        MakeDecoRow(card, new Vector2(0, 440));
+        var card = MakeCard(root, new Vector2(0, 40), new Vector2(900, 1480), new Color(0.12f, 0.10f, 0.22f, 0.95f));
+        MakeDecoRow(card, new Vector2(0, 660));
 
-        var t = MakeText("GO", card, 112, TextAnchor.MiddleCenter, FontStyle.Bold, new Color(1f, 0.36f, 0.48f));
-        t.text = "GAME OVER";
-        Place(t.rectTransform, C, new Vector2(0, 300), new Vector2(840, 180));
+        // --- Judul ---
+        _goTitle = MakeText("GO", card, 108, TextAnchor.MiddleCenter, FontStyle.Bold, new Color(1f, 0.36f, 0.48f));
+        _goTitle.text = "GAME OVER";
+        Place(_goTitle.rectTransform, C, new Vector2(0, 520), new Vector2(840, 170));
+        _goTitleRT = _goTitle.rectTransform;
+        _cgTitle = _goTitle.gameObject.AddComponent<CanvasGroup>();
 
-        var lbl = MakeText("ScoreLbl", card, 48, TextAnchor.MiddleCenter, FontStyle.Bold, new Color(0.75f, 0.8f, 0.9f));
-        lbl.text = "SKOR AKHIR";
-        Place(lbl.rectTransform, C, new Vector2(0, 130), new Vector2(700, 70));
+        // --- Kalimat motivasi ---
+        _goMotivation = MakeText("Motivation", card, 42, TextAnchor.MiddleCenter, FontStyle.Normal, new Color(0.86f, 0.90f, 1f));
+        _goMotivation.horizontalOverflow = HorizontalWrapMode.Wrap;
+        _goMotivation.text = "";
+        Place(_goMotivation.rectTransform, C, new Vector2(0, 370), new Vector2(780, 130));
+        _cgMotivation = _goMotivation.gameObject.AddComponent<CanvasGroup>();
 
-        _goScore = MakeText("Score", card, 134, TextAnchor.MiddleCenter, FontStyle.Bold, new Color(1f, 0.84f, 0.31f));
+        // --- Skor ---
+        var scoreWrap = MakeText("ScoreWrap", card, 44, TextAnchor.MiddleCenter, FontStyle.Bold, new Color(0.75f, 0.8f, 0.9f));
+        scoreWrap.text = "FINAL SCORE";
+        Place(scoreWrap.rectTransform, C, new Vector2(0, 240), new Vector2(700, 70));
+        _cgScore = scoreWrap.gameObject.AddComponent<CanvasGroup>();
+
+        _goScore = MakeText("Score", scoreWrap.transform, 132, TextAnchor.MiddleCenter, FontStyle.Bold, new Color(1f, 0.84f, 0.31f));
         _goScore.text = "0";
-        Place(_goScore.rectTransform, C, new Vector2(0, 20), new Vector2(760, 170));
+        Place(_goScore.rectTransform, C, new Vector2(0, -110), new Vector2(760, 170));
+        _goScoreRT = _goScore.rectTransform;
 
-        _goBest = MakeText("Best", card, 46, TextAnchor.MiddleCenter, FontStyle.Bold, Color.white);
-        _goBest.text = "Skor terbaik: 0";
-        Place(_goBest.rectTransform, C, new Vector2(0, -130), new Vector2(760, 70));
+        // --- NEW RECORD / skor terbaik ---
+        _goRecord = MakeText("Record", card, 76, TextAnchor.MiddleCenter, FontStyle.Bold, new Color(1f, 0.84f, 0.31f));
+        _goRecord.text = "";
+        Place(_goRecord.rectTransform, C, new Vector2(0, -20), new Vector2(800, 110));
+        _goRecordRT = _goRecord.rectTransform;
+        _cgRecord = _goRecord.gameObject.AddComponent<CanvasGroup>();
 
-        _goRestart = MakeButton(card, "MAIN LAGI", new Vector2(0, -320), new Vector2(600, 170),
+        // Disimpan demi kompatibilitas: teks best lama sekarang menyatu ke _goRecord.
+        _goBest = _goRecord;
+
+        // --- Statistik ronde ---
+        _goStats = MakeText("Stats", card, 40, TextAnchor.UpperCenter, FontStyle.Bold, new Color(0.80f, 0.85f, 0.95f));
+        _goStats.text = "";
+        Place(_goStats.rectTransform, C, new Vector2(0, -190), new Vector2(760, 240));
+        _cgStats = _goStats.gameObject.AddComponent<CanvasGroup>();
+
+        // --- Tombol (dibungkus supaya bisa di-fade sekaligus) ---
+        var btnWrap = new GameObject("Buttons", typeof(RectTransform));
+        btnWrap.transform.SetParent(card, false);
+        _goButtonsRoot = btnWrap.GetComponent<RectTransform>();
+        Place(_goButtonsRoot, C, new Vector2(0, -480), new Vector2(860, 400));
+        _cgButtons = btnWrap.AddComponent<CanvasGroup>();
+
+        _goRestart = MakeButton(btnWrap.transform, "PLAY AGAIN", new Vector2(0, 80), new Vector2(600, 170),
             new Color(0.30f, 0.75f, 0.40f), 76);
-        _goHome = MakeButton(card, "MENU UTAMA", new Vector2(0, -510), new Vector2(600, 140),
+        _goHome = MakeButton(btnWrap.transform, "MAIN MENU", new Vector2(0, -110), new Vector2(600, 140),
             new Color(0.30f, 0.55f, 0.95f), 56);
     }
 
