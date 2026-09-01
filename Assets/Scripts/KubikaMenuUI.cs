@@ -18,6 +18,21 @@ public partial class KubikaMenu
     static readonly Color BTN_SLATE = new Color(0.33f, 0.35f, 0.45f);   // netral (MAIN MENU)
     static readonly Color BTN_GRAY  = new Color(0.38f, 0.40f, 0.49f);   // netral terang (BACK)
 
+    // Kotak hias layar JEDA: x, y, ukuran, rotasi.
+    // Posisinya TETAP (bukan acak) dan sengaja dijauhkan dari area kartu jeda
+    // (kartu ada di tengah, 760x840) supaya tidak pernah menabrak teks/tombol.
+    static readonly float[,] PAUSE_DECO =
+    {
+        { -420f,  880f, 150f,  18f },
+        {  405f,  985f, 190f, -12f },
+        { -300f,  625f, 100f,  32f },
+        {  470f,  600f, 120f,  24f },
+        { -460f, -520f, 170f, -20f },
+        {  430f, -605f, 140f,  14f },
+        { -350f, -865f, 110f,  28f },
+        {  360f, -900f, 180f, -26f },
+    };
+
     // ===================== BUILD UI =====================
     void Init()
     {
@@ -185,10 +200,39 @@ public partial class KubikaMenu
     }
 
     // ---- PAUSE ----
+    // Dulu layar jeda cuma satu lapisan HITAM (alpha 0.72) di atas board yang
+    // membeku. Hasilnya kartu jeda terasa "mengapung" / nyempil, karena dia satu-
+    // satunya benda di layar dan tidak punya latar yang jadi pijakannya.
+    // Sekarang layar jeda punya latar sendiri, memakai gradient yang SAMA dengan
+    // background menu supaya satu bahasa visual dengan Home/Settings/GameOver.
     void BuildPause()
     {
-        _pausePanel = MakePanel("PausePanel", new Color(0f, 0f, 0f, 0.72f));
+        _pausePanel = MakePanel("PausePanel", new Color(0f, 0f, 0f, 0f));
         var root = _pausePanel.transform;
+
+        // GradientSprite() di-cache, jadi ini otomatis sprite yang sama dengan
+        // background menu — bukan tekstur baru, dan warnanya dijamin cocok.
+        // Alpha sengaja TIDAK 1: board yang membeku masih terlihat samar di
+        // belakang, jadi pemain tetap sadar permainannya cuma dijeda.
+        var grad = MakeImage("PauseBg", root, new Color(1f, 1f, 1f, 0.88f));
+        grad.sprite = GradientSprite(BG_TOP, BG_BOTTOM);
+        grad.type = Image.Type.Simple;
+        Stretch(grad.rectTransform);
+
+        // Kotak pastel STATIS (tidak dianimasikan — layar jeda memang seharusnya
+        // terasa berhenti, bukan bergerak seperti Home).
+        for (int i = 0; i < PAUSE_DECO.GetLength(0); i++)
+        {
+            var d = MakeSprite("pdeco" + i, root, PaletteA(i, 0.55f));
+            float s = PAUSE_DECO[i, 2];
+            Place(d.rectTransform, C, new Vector2(PAUSE_DECO[i, 0], PAUSE_DECO[i, 1]), new Vector2(s, s));
+            d.rectTransform.localRotation = Quaternion.Euler(0f, 0f, PAUSE_DECO[i, 3]);
+        }
+
+        // Halo emas lembut di belakang kartu — trik yang sama dipakai di Home.
+        // Ini yang membuat kartu terasa DUDUK di latarnya, bukan ditempel di atasnya.
+        var cardHalo = MakeGlow(root, new Color(1f, 0.84f, 0.31f, 0.13f));
+        Place(cardHalo.rectTransform, C, new Vector2(0, 40), new Vector2(1000, 1080));
 
         var card = MakeCard(root, new Vector2(0, 40), new Vector2(760, 840), CARD_DEEP);
         MakeDecoRow(card, new Vector2(0, 300));
