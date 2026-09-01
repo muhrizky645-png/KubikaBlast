@@ -1,14 +1,11 @@
-// BAGIAN 2 dari 3 (pembangun UI). Logika ada di KubikaItems.cs, efek di KubikaItemsFx.cs.
+// BAGIAN 2 dari 4 (pembangun UI umum). Logika di KubikaItems.cs,
+// efek di KubikaItemsFx.cs, layar toko di KubikaItemsShop.cs.
 
 using UnityEngine;
 using UnityEngine.UI;
 
 public partial class KubikaItems
 {
-    // Tiga kolom berjajar dipakai DUA KALI di layar toko (item & paket permata).
-    // Lebar 280 x 3 = 840, ditambah 2 jarak 20 = 880 -> pas di dalam kartu 960.
-    static readonly float[] SHOP_COL_X = { -290f, 0f, 290f };
-
     void BuildUI()
     {
         _built = true;
@@ -211,160 +208,6 @@ public partial class KubikaItems
         _payText = MakeText("payTxt", card, 54, TextAnchor.MiddleCenter, FontStyle.Bold, Color.white);
         Place(_payText.rectTransform, C, new Vector2(0, -20), new Vector2(800, 300));
         _pay.SetActive(false);
-    }
-
-    // ---- TOKO ----
-    // Dulu semuanya BARIS MENDATAR yang ditumpuk vertikal (6 baris 880x190),
-    // jadi kartunya harus 2000px -- hampir setinggi layar penuh, dan tiap baris
-    // punya banyak ruang kosong di tengah.
-    // Sekarang gaya KARTU MARKETPLACE: 3 kolom berjajar untuk item, 3 kolom lagi
-    // untuk paket permata. Tinggi kartu turun 2000 -> 1560 dan semuanya kebaca
-    // sekali pandang tanpa mata harus turun jauh.
-    void BuildShop()
-    {
-        _shop = MakeFullPanel(_modal.transform, "Shop", new Color(0f, 0f, 0f, 0.78f));
-        var card = MakeCard(_shop.transform, new Vector2(0, 30), new Vector2(960, 1560),
-            new Color(0.10f, 0.12f, 0.20f, 0.97f));
-
-        // ---- header: mahkota + judul di kiri, counter permata di POJOK KANAN ATAS ----
-        if (_spCrown != null)
-        {
-            var cr = MakeImage("shopCrown", card, Color.white);
-            cr.sprite = _spCrown;
-            cr.preserveAspect = true;
-            Place(cr.rectTransform, C, new Vector2(-395, 672), new Vector2(86, 86));
-        }
-
-        var title = MakeText("sTitle", card, 74, TextAnchor.MiddleLeft, FontStyle.Bold,
-            new Color(1f, 0.85f, 0.3f));
-        title.text = "GEM SHOP";
-        Place(title.rectTransform, C, new Vector2(-50, 670), new Vector2(560, 110));
-
-        var pill = MakeSprite("shopGemPill", card, new Color(0f, 0f, 0f, 0.42f));
-        Place(pill.rectTransform, C, new Vector2(330, 670), new Vector2(290, 96));
-        _shopGemPill = pill.rectTransform;
-        if (_spGem != null)
-        {
-            var gi = MakeImage("shopGemIcon", pill.rectTransform, Color.white);
-            gi.sprite = _spGem;
-            gi.preserveAspect = true;
-            Place(gi.rectTransform, C, new Vector2(-98, 0), new Vector2(64, 64));
-        }
-        _shopGems = MakeText("sGems", pill.rectTransform, 50, TextAnchor.MiddleLeft, FontStyle.Bold,
-            new Color(0.72f, 0.95f, 1f));
-        _shopGems.text = "0";
-        Place(_shopGems.rectTransform, C, new Vector2(30, 0), new Vector2(180, 70));
-
-        // ---- bagian 1: kolom item, urutan Bom -> Palu -> Undo (bom termahal di kiri) ----
-        var sec1 = MakeText("sec1", card, 40, TextAnchor.MiddleLeft, FontStyle.Bold,
-            new Color(0.62f, 0.68f, 0.82f));
-        sec1.text = "ITEMS";
-        Place(sec1.rectTransform, C, new Vector2(-215, 560), new Vector2(400, 60));
-
-        for (int slot = 0; slot < 3; slot++)
-        {
-            int i = (int)SHOP_ORDER[slot];
-            var col = ICOL[i];
-
-            // Isi kolom ditumpuk atas->bawah: gambar, nama, jumlah dimiliki, harga, BUY.
-            var box = MakeCard(card, new Vector2(SHOP_COL_X[slot], 310f), new Vector2(280, 440),
-                new Color(col.r * 0.20f, col.g * 0.20f, col.b * 0.20f, 0.82f));
-            _shopCard[i] = box;
-
-            var thumb = MakeSprite("th" + i, box, new Color(col.r, col.g, col.b, 0.20f));
-            Place(thumb.rectTransform, C, new Vector2(0, 126), new Vector2(150, 150));
-
-            var ic = IconOf((Item)i);
-            if (ic != null)
-            {
-                var ri = MakeImage("ri" + i, thumb.rectTransform, Color.white);
-                ri.sprite = ic;
-                ri.preserveAspect = true;
-                Place(ri.rectTransform, C, Vector2.zero, new Vector2(112, 112));
-            }
-
-            var nm = MakeText("n" + i, box, 42, TextAnchor.MiddleCenter, FontStyle.Bold, col);
-            nm.text = NAME[i];
-            Place(nm.rectTransform, C, new Vector2(0, 24), new Vector2(268, 60));
-
-            _shopOwned[i] = MakeText("o" + i, box, 28, TextAnchor.MiddleCenter, FontStyle.Normal,
-                new Color(0.74f, 0.80f, 0.92f));
-            _shopOwned[i].text = "Owned: 0";
-            Place(_shopOwned[i].rectTransform, C, new Vector2(0, -26), new Vector2(268, 48));
-
-            // Ikon permata + angka harga dibuat satu kelompok yang terlihat di tengah.
-            if (_spGem != null)
-            {
-                var pg = MakeImage("pg" + i, box, Color.white);
-                pg.sprite = _spGem;
-                pg.preserveAspect = true;
-                Place(pg.rectTransform, C, new Vector2(-58, -84), new Vector2(44, 44));
-            }
-            _shopPrice[i] = MakeText("p" + i, box, 40, TextAnchor.MiddleLeft, FontStyle.Bold,
-                new Color(1f, 0.88f, 0.38f));
-            _shopPrice[i].text = PRICE[i].ToString();
-            Place(_shopPrice[i].rectTransform, C, new Vector2(-26, -84), new Vector2(160, 58));
-
-            _shopBuy[i] = MakeButton(box, "BUY", new Vector2(0, -162), new Vector2(228, 96),
-                new Color(0.24f, 0.72f, 0.42f), 44);
-        }
-
-        // ---- bagian 2: paket permata (SIMULASI bayar), juga 3 kolom berjajar ----
-        var div = MakeImage("div", card, new Color(1f, 1f, 1f, 0.12f));
-        Place(div.rectTransform, C, new Vector2(0, 40), new Vector2(880, 3));
-
-        var sec2 = MakeText("sec2", card, 46, TextAnchor.MiddleCenter, FontStyle.Bold,
-            new Color(1f, 0.85f, 0.35f));
-        sec2.text = "GET MORE GEMS";
-        Place(sec2.rectTransform, C, new Vector2(0, -30), new Vector2(880, 66));
-
-        for (int i = 0; i < 3; i++)
-        {
-            var box = MakeCard(card, new Vector2(SHOP_COL_X[i], -280f), new Vector2(280, 420),
-                new Color(0.24f, 0.20f, 0.44f, 0.88f));
-
-            if (_spGem != null)
-            {
-                var gi = MakeImage("pgi" + i, box, Color.white);
-                gi.sprite = _spGem;
-                gi.preserveAspect = true;
-                Place(gi.rectTransform, C, new Vector2(0, 100), new Vector2(100, 100));
-            }
-
-            var amt = MakeText("pa" + i, box, 46, TextAnchor.MiddleCenter, FontStyle.Bold,
-                new Color(0.72f, 0.95f, 1f));
-            amt.text = PACK_GEMS[i].ToString("N0");
-            Place(amt.rectTransform, C, new Vector2(0, 8), new Vector2(268, 62));
-
-            var sub = MakeText("ps" + i, box, 26, TextAnchor.MiddleCenter, FontStyle.Normal,
-                new Color(0.78f, 0.82f, 0.95f));
-            sub.text = PACK_SUB[i];
-            Place(sub.rectTransform, C, new Vector2(0, -40), new Vector2(268, 46));
-
-            // Label POPULAR / BEST VALUE dipindah ke PUNCAK kolom supaya tidak lagi
-            // menabrak angka jumlah permata.
-            if (PACK_TAG[i].Length > 0)
-            {
-                var tag = MakeSprite("pt" + i, box, new Color(1f, 0.62f, 0.20f, 0.95f));
-                Place(tag.rectTransform, C, new Vector2(0, 180), new Vector2(190, 44));
-                var tt = MakeText("ptt" + i, tag.rectTransform, 26, TextAnchor.MiddleCenter,
-                    FontStyle.Bold, Color.white);
-                tt.text = PACK_TAG[i];
-                Place(tt.rectTransform, C, Vector2.zero, new Vector2(190, 44));
-            }
-
-            _packBuy[i] = MakeButton(box, PACK_PRICE[i], new Vector2(0, -142), new Vector2(228, 96),
-                new Color(0.95f, 0.60f, 0.18f), 42);
-        }
-
-        _shopStatus = MakeText("sStat", card, 38, TextAnchor.MiddleCenter, FontStyle.Bold,
-            new Color(1f, 0.7f, 0.4f));
-        _shopStatus.text = "";
-        Place(_shopStatus.rectTransform, C, new Vector2(0, -560), new Vector2(880, 66));
-
-        _shopClose = MakeButton(card, "CLOSE", new Vector2(0, -680), new Vector2(520, 140),
-            new Color(0.45f, 0.47f, 0.55f), 58);
-        _shop.SetActive(false);
     }
 
     void BuildTokoButton()
