@@ -7,14 +7,18 @@ using KubikaBlast;
 /// manual ke GameObject) lewat RuntimeInitializeOnLoadMethod, jadi cukup ada file
 /// ini di project. Berjalan di belakang tabung 3D.
 ///
-/// DUA PERUBAHAN:
-///  1. Gelembung DIHIDUPKAN lagi. Kodenya sudah lengkap tapi terkunci di balik
-///     `if (false)`. Gerbangnya dibuka persis seperti petunjuk di komentar
-///     aslinya, termasuk baris `vel.z` yang hilang — justru itu sebabnya dulu
-///     sistemnya dimatikan.
-///  2. Background kini MENJAWAB pemain: tiap clear mendorong kilau singkat
-///     lewat gradient, kekuatannya mengikuti combo, dan gelembung memancar
-///     lebih cepat selama combo berjalan.
+/// TEMA TERANG:
+///  Palet lama semuanya gelap (bottom 0.03-0.13 alias hampir hitam) sehingga
+///  gameplay terasa muram padahal menunya sudah cerah. Sekarang tiap level
+///  memakai pasangan CERAH: bagian atas warna sedang-pekat, bagian bawah pucat
+///  dan hangat. Susunan ini disengaja: teks HUD di ATAS layar (LEVEL, skor)
+///  berwarna putih/mint, jadi bagian atas TIDAK boleh mendekati putih atau
+///  teksnya hilang. Level 1 sengaja disamakan dengan background menu supaya
+///  perpindahan menu -> gameplay terasa menyambung.
+///
+///  Ikut disesuaikan: kilau setelah clear (dulu menggelapkan bagian bawah, di
+///  atas warna terang itu tampak seperti noda) dan warna gelembung (dulu putih,
+///  di atas background terang jadi tak terlihat sama sekali).
 /// </summary>
 public class BlastBackground : MonoBehaviour
 {
@@ -32,24 +36,30 @@ public class BlastBackground : MonoBehaviour
     [Range(0f, 1f)] public float bloomStrength = 0.55f;
 
     // Pasangan warna gradient (atas & bawah) per level; berputar kalau level melebihi jumlah.
+    // Atas = warna sedang-pekat (biar teks HUD putih tetap terbaca).
+    // Bawah = pucat & hangat (biar suasananya ringan dan menyenangkan).
     static readonly Color[] TopColors =
     {
-        new Color(0.18f, 0.24f, 0.46f),
-        new Color(0.38f, 0.16f, 0.44f),
-        new Color(0.10f, 0.36f, 0.40f),
-        new Color(0.44f, 0.26f, 0.14f),
-        new Color(0.12f, 0.32f, 0.18f),
-        new Color(0.32f, 0.12f, 0.24f),
+        new Color(0.42f, 0.74f, 0.96f),   // 1. biru langit  (sama dengan menu)
+        new Color(0.62f, 0.55f, 0.93f),   // 2. lilac
+        new Color(0.30f, 0.78f, 0.74f),   // 3. teal mint
+        new Color(0.98f, 0.66f, 0.44f),   // 4. peach
+        new Color(0.44f, 0.79f, 0.52f),   // 5. hijau segar
+        new Color(0.97f, 0.55f, 0.62f),   // 6. rose
     };
     static readonly Color[] BottomColors =
     {
-        new Color(0.05f, 0.06f, 0.13f),
-        new Color(0.09f, 0.04f, 0.15f),
-        new Color(0.03f, 0.11f, 0.12f),
-        new Color(0.13f, 0.07f, 0.03f),
-        new Color(0.03f, 0.10f, 0.05f),
-        new Color(0.11f, 0.03f, 0.08f),
+        new Color(0.99f, 0.90f, 0.76f),   // 1. krem hangat  (sama dengan menu)
+        new Color(0.99f, 0.88f, 0.92f),   // 2. pink pucat
+        new Color(0.93f, 0.97f, 0.82f),   // 3. hijau-kuning pucat
+        new Color(1.00f, 0.93f, 0.80f),   // 4. emas pucat
+        new Color(0.90f, 0.97f, 0.86f),   // 5. mint pucat
+        new Color(0.95f, 0.90f, 0.98f),   // 6. lavender pucat
     };
+
+    // Gelembung: di atas background terang, putih tidak terlihat. Dipakai tint
+    // biru-tua supaya gelembungnya terbaca sebagai bayangan lembut.
+    static readonly Color BubbleTint = new Color(0.20f, 0.28f, 0.52f);
 
     BlastGame _game;
     BlastGame _hooked;
@@ -217,7 +227,7 @@ public class BlastBackground : MonoBehaviour
             main.startSize = new ParticleSystem.MinMaxCurve(ph * 0.02f, ph * 0.06f);
             main.maxParticles = 120;
             main.simulationSpace = ParticleSystemSimulationSpace.Local;
-            main.startColor = new Color(1f, 1f, 1f, 0.35f);
+            main.startColor = new Color(BubbleTint.r, BubbleTint.g, BubbleTint.b, 0.26f);
 
             var emission = _ps.emission;
             emission.rateOverTime = _baseEmission;
@@ -263,11 +273,13 @@ public class BlastBackground : MonoBehaviour
 
     void ApplyNow()
     {
-        // Kilau setelah clear: naikkan bagian atas gradient sedikit ke arah warna
-        // hangat, lalu biarkan surut. Halus, bukan lampu disko.
+        // Kilau setelah clear. Di tema gelap dulu caranya: atas ditarik ke krem,
+        // bawah ditarik ke ungu gelap. Di atas warna terang, menggelapkan bagian
+        // bawah justru terlihat seperti noda kotor. Jadi sekarang KEDUANYA ditarik
+        // ke arah putih — terbaca sebagai kilatan cahaya. Halus, bukan lampu disko.
         float b = _bloom * Mathf.Clamp01(bloomStrength);
-        Color top = Color.Lerp(_curTop, new Color(1f, 0.92f, 0.72f), b * 0.42f);
-        Color bot = Color.Lerp(_curBot, new Color(0.28f, 0.22f, 0.34f), b * 0.22f);
+        Color top = Color.Lerp(_curTop, new Color(1f, 0.99f, 0.94f), b * 0.50f);
+        Color bot = Color.Lerp(_curBot, Color.white, b * 0.30f);
         Apply(top, bot);
     }
 
@@ -295,8 +307,10 @@ public class BlastBackground : MonoBehaviour
         if (_ps != null)
         {
             var main = _ps.main;
-            Color pc = Color.Lerp(top, Color.white, 0.35f);
-            pc.a = 0.4f;
+            // Dulu: Lerp(top, Color.white, 0.35f) -> gelembung putih, hilang di
+            // background terang. Sekarang ditarik ke tint gelap supaya kelihatan.
+            Color pc = Color.Lerp(top, BubbleTint, 0.55f);
+            pc.a = 0.26f;
             main.startColor = pc;
         }
     }
