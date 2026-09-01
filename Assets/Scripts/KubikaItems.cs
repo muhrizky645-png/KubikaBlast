@@ -12,19 +12,6 @@ using UnityEngine.InputSystem;
 #endif
 using KubikaBlast;
 
-/// <summary>
-/// SISTEM ITEM / POWER-UP + PERMATA untuk Kubika Blast (ADD-ON).
-///
-/// Item: HAMMER (baris+kolom), BOMB (4x4), UNDO (batalkan langkah).
-/// Didapat dari bubble + iklan (simulasi), atau dibeli di TOKO pakai permata.
-///
-/// EKONOMI PERMATA: kelas ini MENDENGARKAN BlastGame.OnCleared dan menyimpan
-/// info.Gems. Clear dari alat datang bertanda FromTool dan TIDAK dibayar,
-/// supaya membeli palu tak pernah bisa menghasilkan permata melebihi harganya.
-///
-/// Execution order default (0) -> jalan SEBELUM BlastInput (1000), jadi bisa
-/// mengambil snapshot papan sebelum langkah pemain untuk fitur UNDO.
-/// </summary>
 public class KubikaItems : MonoBehaviour
 {
     public static KubikaItems Instance { get; private set; }
@@ -38,8 +25,6 @@ public class KubikaItems : MonoBehaviour
     const string GEM_KEY = "kubika_gems";
     static readonly string[] ITEM_KEY = { "kubika_item_hammer", "kubika_item_bomb", "kubika_item_undo" };
 
-    // Diturunkan dari { 200, 600, 400 }. Dengan rumus permata BlastCore (3 untuk
-    // satu baris polos), harga lama membuat sebuah bom setara ~200 baris.
     static readonly int[] PRICE = { 120, 260, 180 };
     static readonly string[] NAME = { "HAMMER", "BOMB", "UNDO" };
     static readonly Color[] ICOL =
@@ -71,8 +56,6 @@ public class KubikaItems : MonoBehaviour
     Text _gemLabel;
     RectTransform _gemPill;
 
-    // Angka permata yang DITAMPILKAN, sengaja tertinggal dari nilai asli supaya
-    // bisa merangkak naik saat tiap permata mendarat.
     int _gemShown = -1;
     int _gemsInFlight;
     Vector2 _burstOrigin = new Vector2(0f, 180f);
@@ -170,9 +153,6 @@ public class KubikaItems : MonoBehaviour
         _selfModified = false;
     }
 
-    // ============================================================
-    //  HOOK KE BLASTGAME
-    // ============================================================
     void HookGame()
     {
         if (_game == null || ReferenceEquals(_game, _hookedGame)) return;
@@ -192,8 +172,6 @@ public class KubikaItems : MonoBehaviour
 
     void HandleCleared(BlastCore.ClearInfo info)
     {
-        // Clear dari alat tidak membayar: kalau membayar, membeli palu bisa
-        // menghasilkan permata lebih banyak daripada harganya.
         if (info.FromTool) return;
 
         int gems = Mathf.Max(1, info.Gems);
@@ -211,7 +189,6 @@ public class KubikaItems : MonoBehaviour
         _mode = Mode.None;
     }
 
-    /// <summary>Titik tengah sel yang benar-benar hancur, dalam koordinat canvas.</summary>
     Vector2 BurstOrigin(BlastCore.ClearInfo info)
     {
         if (_cam == null) _cam = Camera.main;
@@ -229,10 +206,6 @@ public class KubikaItems : MonoBehaviour
         return local;
     }
 
-    /// <summary>
-    /// Ke mana permata terbang. Dulu konstanta piksel (-456, 962) yang hanya
-    /// benar di satu rasio layar; kini dibaca dari rect pil permata sendiri.
-    /// </summary>
     Vector2 GemTarget()
     {
         if (_gemPill == null || _play == null) return new Vector2(-354f, 958f);
@@ -243,9 +216,6 @@ public class KubikaItems : MonoBehaviour
         return local;
     }
 
-    // ============================================================
-    //  UNDO SNAPSHOT
-    // ============================================================
     void HandleUndoSnapshot()
     {
         if (!_hasSnap || _core.LinesCleared < _snapLines || (_snapGrid != null &&
@@ -286,7 +256,6 @@ public class KubikaItems : MonoBehaviour
         var t = DeepCopyTray(_undoTray);
         for (int i = 0; i < _core.Tray.Length && i < t.Length; i++) _core.Tray[i] = t[i];
 
-        // Papan berubah -> status game over harus dihitung ulang, jangan diwarisi.
         _core.RecheckGameOver();
 
         _game.RenderGrid();
@@ -334,9 +303,6 @@ public class KubikaItems : MonoBehaviour
         return dst;
     }
 
-    // ============================================================
-    //  BUBBLE ITEM JATUH
-    // ============================================================
     void HandleBubble(bool canRun)
     {
         if (!canRun)
@@ -398,9 +364,6 @@ public class KubikaItems : MonoBehaviour
         _bubble.SetActive(true);
     }
 
-    // ============================================================
-    //  IKLAN (SIMULASI)
-    // ============================================================
     void OpenConfirm(Item it)
     {
         _pending = it;
@@ -437,9 +400,6 @@ public class KubikaItems : MonoBehaviour
         else _adPanel.SetActive(false);
     }
 
-    // ============================================================
-    //  PAKAI ITEM
-    // ============================================================
     void OnItemButton(Item it)
     {
         if (GetItem(it) <= 0) { OpenShop(); return; }
@@ -488,7 +448,6 @@ public class KubikaItems : MonoBehaviour
         }
         else return;
 
-        // Rekam warna + posisi SEBELUM grid dibersihkan, untuk efek.
         var caps = new List<(int color, Vector3 pos, Quaternion rot)>();
         var seen = new HashSet<int>();
         foreach (var (cc, rr) in cells)
@@ -504,9 +463,6 @@ public class KubikaItems : MonoBehaviour
         bool bomb = _mode == Mode.Bomb;
         Vector3 center = _game.CellToWorld(c, r);
 
-        // Lewat BlastCore.BlastCells, BUKAN menulis Grid[c,r] = -1 sendiri.
-        // Menulis langsung melewatkan penghitungan ulang game over, sehingga
-        // sebuah alat bisa membebaskan papan tapi game tetap merasa buntu.
         _core.BlastCells(cells);
 
         AddItem(bomb ? Item.Bomb : Item.Hammer, -1);
@@ -533,7 +489,7 @@ public class KubikaItems : MonoBehaviour
         Ray ray = _cam.ScreenPointToRay(sp);
         if (Physics.Raycast(ray, out RaycastHit hit, 500f))
         {
-            var n = hit.collider.gameObject.name; // "Block_c_r"
+            var n = hit.collider.gameObject.name;
             var parts = n.Split('_');
             if (parts.Length == 3 && int.TryParse(parts[1], out col) && int.TryParse(parts[2], out row))
                 return true;
@@ -541,9 +497,6 @@ public class KubikaItems : MonoBehaviour
         return false;
     }
 
-    // ============================================================
-    //  TOKO
-    // ============================================================
     public static void OpenShop() { if (Instance != null) Instance.OpenShopInternal(); }
     void OpenShopInternal() { _shopStatus.text = ""; RefreshShop(); _shop.SetActive(true); }
     void CloseShop() { _shop.SetActive(false); }
@@ -565,9 +518,6 @@ public class KubikaItems : MonoBehaviour
         for (int i = 0; i < 3; i++) _shopOwned[i].text = "Owned: " + GetItem((Item)i);
     }
 
-    // ============================================================
-    //  INVENTORY / GEM STORAGE
-    // ============================================================
     int GetGems() => PlayerPrefs.GetInt(GEM_KEY, 0);
     void AddGems(int d) { PlayerPrefs.SetInt(GEM_KEY, Mathf.Max(0, GetGems() + d)); PlayerPrefs.Save(); }
     int GetItem(Item it) => PlayerPrefs.GetInt(ITEM_KEY[(int)it], 0);
@@ -580,17 +530,10 @@ public class KubikaItems : MonoBehaviour
         if (_gemLabel == null) return;
         int real = GetGems();
         if (_gemShown < 0) _gemShown = real;
-        // Tidak ada permata terbang -> angka tampilan harus sama dengan aslinya.
         if (_gemsInFlight <= 0 && _gemShown != real) _gemShown = real;
         _gemLabel.text = _gemShown.ToString();
     }
 
-    // ============================================================
-    //  TOAST
-    //  Dulu pesan seperti "belum ada langkah untuk di-undo" ditulis ke
-    //  _shopStatus, yang hidup DI DALAM panel toko - jadi hanya terlihat kalau
-    //  toko kebetulan terbuka.
-    // ============================================================
     void FlashHint(string msg)
     {
         if (_toast == null) return;
@@ -628,9 +571,6 @@ public class KubikaItems : MonoBehaviour
         _toastCo = null;
     }
 
-    // ============================================================
-    //  INPUT
-    // ============================================================
     void HandleTaps()
     {
         bool down = PDown();
@@ -681,9 +621,6 @@ public class KubikaItems : MonoBehaviour
         }
     }
 
-    // ============================================================
-    //  BUILD UI
-    // ============================================================
     void BuildUI()
     {
         _built = true;
@@ -741,20 +678,22 @@ public class KubikaItems : MonoBehaviour
             Place(rt, new Vector2(0.5f, 0f), new Vector2(xs[i], 400f), new Vector2(210, 150));
             _itemBtn[i] = rt;
 
-            var lbl = MakeText("lbl" + i, rt, 46, TextAnchor.MiddleCenter, FontStyle.Bold, Color.white);
-            lbl.text = NAME[i];
-            Place(lbl.rectTransform, C, new Vector2(0, 10), new Vector2(210, 90));
-
             var itSp = (i == 0) ? _spHammer : (i == 1) ? _spBomb : _spUndo;
             if (itSp != null)
             {
+                // Item cukup lewat ikon saja - TANPA tulisan nama.
                 var icon = MakeImage("icon" + i, rt, Color.white);
                 icon.sprite = itSp;
                 icon.preserveAspect = true;
-                Place(icon.rectTransform, C, new Vector2(0, 26), new Vector2(120, 120));
-                lbl.fontSize = 30;
-                Place(lbl.rectTransform, C, new Vector2(0, -52), new Vector2(210, 50));
+                Place(icon.rectTransform, C, new Vector2(0, 4), new Vector2(132, 132));
                 btn.color = new Color(ICOL[i].r, ICOL[i].g, ICOL[i].b, 0.30f);
+            }
+            else
+            {
+                // Fallback: kalau ikon belum ada, baru tampilkan nama supaya tombol tak kosong.
+                var lbl = MakeText("lbl" + i, rt, 44, TextAnchor.MiddleCenter, FontStyle.Bold, Color.white);
+                lbl.text = NAME[i];
+                Place(lbl.rectTransform, C, new Vector2(0, 10), new Vector2(210, 90));
             }
 
             var badge = MakeSprite("badge" + i, rt, new Color(0f, 0f, 0f, 0.55f));
@@ -914,7 +853,6 @@ public class KubikaItems : MonoBehaviour
         _tokoBtn.gameObject.SetActive(false);
     }
 
-    // ---- Helpers UI ----
     GameObject MakeFullPanel(Transform parent, string name, Color col)
     {
         var img = MakeImage(name, parent, col);
@@ -1037,9 +975,6 @@ public class KubikaItems : MonoBehaviour
         => rt != null && rt.gameObject.activeInHierarchy
            && RectTransformUtility.RectangleContainsScreenPoint(rt, sp, null);
 
-    // ============================================================
-    //  IKON & SPRITE PROSEDURAL
-    // ============================================================
     void LoadIcons()
     {
         _spHammer = LoadIcon("Hammer_A");
@@ -1093,15 +1028,6 @@ public class KubikaItems : MonoBehaviour
         return m;
     }
 
-    // ============================================================
-    //  JUICE
-    //  Getar kamera & hit-stop TIDAK lagi dikerjakan sendiri di sini. Dulu file
-    //  ini menulis Camera.main.localPosition langsung lalu memulihkan posisi
-    //  yang KEBETULAN dilihatnya; kini BlastGame juga menggetarkan kamera, jadi
-    //  keduanya saling menimpa dan bisa meninggalkan kamera melenceng. Hit-stop
-    //  pun dulu menyetel Time.timeScale sendiri, padahal jaring pengaman
-    //  KubikaMenu hanya tahu harus mengalah untuk BlastGame.HitStopActive.
-    // ============================================================
     void BuildFxOverlay()
     {
         _flash = MakeImage("Flash", _fxCanvas.transform, new Color(1f, 1f, 1f, 0f));
@@ -1154,7 +1080,6 @@ public class KubikaItems : MonoBehaviour
         Destroy(img.gameObject);
     }
 
-    // ---- Efek HAMMER / BOMB pada blok 3D ----
     IEnumerator BlockFx(List<(int color, Vector3 pos, Quaternion rot)> caps, bool bomb, Vector3 center)
     {
         if (_game == null || caps == null || caps.Count == 0) yield break;
@@ -1223,7 +1148,6 @@ public class KubikaItems : MonoBehaviour
             yield return null;
         }
 
-        // Klimaks ledakan.
         if (KubikaSfx.Instance != null) KubikaSfx.Instance.PlayBomb();
         StartCoroutine(FlashScreen(new Color(1f, 0.85f, 0.55f), 0.6f, 0.26f));
         Shake(1.0f);
@@ -1337,14 +1261,6 @@ public class KubikaItems : MonoBehaviour
         if (go != null) Destroy(go);
     }
 
-    // ============================================================
-    //  PERMATA
-    //  Dulu: maksimal 8 sprite berapa pun permata yang didapat, dan angka HUD
-    //  melompat ke nilai akhir saat itu juga - sebelum satu pun permata sampai,
-    //  jadi permata yang terbang tidak berarti apa-apa. Sekarang jumlahnya nyata
-    //  (sampai 20, masing-masing membawa jatahnya), melengkung ke HUD sambil
-    //  meninggalkan jejak, dan angkanya merangkak naik seiring pendaratan.
-    // ============================================================
     IEnumerator GemBurst(int gems, int combo)
     {
         if (_play == null || _gemLabel == null) yield break;
@@ -1382,7 +1298,6 @@ public class KubikaItems : MonoBehaviour
         rt.anchoredPosition = pos;
         rt.localScale = Vector3.zero;
 
-        // 1) Lahir: pop dengan sedikit overshoot.
         float t = 0f, birth = 0.16f;
         while (t < birth)
         {
@@ -1394,7 +1309,6 @@ public class KubikaItems : MonoBehaviour
             yield return null;
         }
 
-        // 2) Terlempar keluar sebentar.
         Vector2 vel = new Vector2(Random.Range(-260f, 260f), Random.Range(180f, 420f));
         t = 0f;
         float scatter = Random.Range(0.22f, 0.34f);
@@ -1408,7 +1322,6 @@ public class KubikaItems : MonoBehaviour
             yield return null;
         }
 
-        // 3) Terbang MELENGKUNG ke HUD sambil meninggalkan jejak.
         Vector2 from = pos;
         Vector2 mid = (from + target) * 0.5f
                     + new Vector2(Random.Range(-120f, 120f), Random.Range(160f, 300f));
@@ -1439,7 +1352,6 @@ public class KubikaItems : MonoBehaviour
 
         Destroy(img.gameObject);
 
-        // 4) Mendarat: kilau kecil, angka HUD naik, tik nada meninggi.
         StartCoroutine(LandFlash(target));
         if (_gemLabel != null) StartCoroutine(PunchLabel(_gemLabel.rectTransform));
         _gemShown = Mathf.Min(GetGems(), Mathf.Max(0, _gemShown) + worth);
@@ -1551,7 +1463,6 @@ public class KubikaItems : MonoBehaviour
         rt.localScale = Vector3.one;
     }
 
-    // ---- Pointer abstraksi ----
     Vector2 PPos()
     {
 #if USE_NEW_INPUT
