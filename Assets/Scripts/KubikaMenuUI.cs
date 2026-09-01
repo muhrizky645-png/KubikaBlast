@@ -20,14 +20,15 @@ public partial class KubikaMenu
 
     // Kotak hias layar JEDA: x, y, ukuran, rotasi.
     // Posisinya TETAP (bukan acak) dan sengaja dijauhkan dari area kartu jeda
-    // (kartu ada di tengah, 760x840) supaya tidak pernah menabrak teks/tombol.
+    // (kartu ada di tengah, 760x980 -> y -450..530) supaya tidak pernah menabrak
+    // teks atau tombol.
     static readonly float[,] PAUSE_DECO =
     {
         { -420f,  880f, 150f,  18f },
         {  405f,  985f, 190f, -12f },
         { -300f,  625f, 100f,  32f },
         {  470f,  600f, 120f,  24f },
-        { -460f, -520f, 170f, -20f },
+        { -475f, -560f, 170f, -20f },
         {  430f, -605f, 140f,  14f },
         { -350f, -865f, 110f,  28f },
         {  360f, -900f, 180f, -26f },
@@ -205,6 +206,12 @@ public partial class KubikaMenu
     // satunya benda di layar dan tidak punya latar yang jadi pijakannya.
     // Sekarang layar jeda punya latar sendiri, memakai gradient yang SAMA dengan
     // background menu supaya satu bahasa visual dengan Home/Settings/GameOver.
+    //
+    // TATA LETAK: kartu 760x980 (dulu 840). Dengan tinggi 840, tombol MAIN MENU di
+    // y -340 dengan tinggi 140 punya tepi bawah di -410, sementara dasar kartu cuma
+    // di -380 -- jadi tombolnya BOCOR 30px keluar kartu, plus lapisan bayangan 3D
+    // dari MakeButton (~17px) di bawahnya lagi. Sekarang isi kartu digeser naik dan
+    // kartunya ditinggikan, menyisakan ~43px jarak aman di bawah MAIN MENU.
     void BuildPause()
     {
         _pausePanel = MakePanel("PausePanel", new Color(0f, 0f, 0f, 0f));
@@ -232,17 +239,17 @@ public partial class KubikaMenu
         // Halo emas lembut di belakang kartu — trik yang sama dipakai di Home.
         // Ini yang membuat kartu terasa DUDUK di latarnya, bukan ditempel di atasnya.
         var cardHalo = MakeGlow(root, new Color(1f, 0.84f, 0.31f, 0.13f));
-        Place(cardHalo.rectTransform, C, new Vector2(0, 40), new Vector2(1000, 1080));
+        Place(cardHalo.rectTransform, C, new Vector2(0, 40), new Vector2(1020, 1220));
 
-        var card = MakeCard(root, new Vector2(0, 40), new Vector2(760, 840), CARD_DEEP);
-        MakeDecoRow(card, new Vector2(0, 300));
+        var card = MakeCard(root, new Vector2(0, 40), new Vector2(760, 980), CARD_DEEP);
+        MakeDecoRow(card, new Vector2(0, 370));
         var title = MakeText("Title", card, 100, TextAnchor.MiddleCenter, FontStyle.Bold, Color.white);
         title.text = "PAUSED";
-        Place(title.rectTransform, C, new Vector2(0, 180), new Vector2(700, 160));
+        Place(title.rectTransform, C, new Vector2(0, 240), new Vector2(700, 160));
 
-        _btnResume = MakeButton(card, "RESUME", new Vector2(0, 20), new Vector2(600, 160), BTN_GREEN, 76);
-        _btnSettingsPause = MakeButton(card, "SETTINGS", new Vector2(0, -170), new Vector2(600, 140), BTN_BLUE, 56);
-        _btnHome = MakeButton(card, "MAIN MENU", new Vector2(0, -340), new Vector2(600, 140), BTN_SLATE, 56);
+        _btnResume = MakeButton(card, "RESUME", new Vector2(0, 60), new Vector2(600, 160), BTN_GREEN, 76);
+        _btnSettingsPause = MakeButton(card, "SETTINGS", new Vector2(0, -140), new Vector2(600, 140), BTN_BLUE, 56);
+        _btnHome = MakeButton(card, "MAIN MENU", new Vector2(0, -320), new Vector2(600, 140), BTN_SLATE, 56);
     }
 
     // ---- SETTINGS ----

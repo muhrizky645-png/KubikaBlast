@@ -6,25 +6,31 @@ using KubikaBlast;
 /// <summary>
 /// TRANSISI PEMBUKA (penghias saat tombol MAIN ditekan).
 ///
-/// Blok bawaan (starting fill dari BlastGame.StartingFill) tidak lagi muncul
-/// jadi begitu saja. Blok-blok itu disembunyikan dulu, lalu tiruan (copy) nya
-/// terbang masuk dari segala arah SATU PER SATU dan terpasang tepat di posisi
-/// aslinya. Begitu satu tiruan mendarat, blok asli dinyalakan dan tiruannya
-/// dibuang -- jadi papan yang ditinggalkan animasi ini 100% identik dengan
-/// papan yang dibuat BlastCore. Animasi ini MURNI hiasan: tidak menyentuh
-/// Grid, skor, tray, maupun combo.
+/// Blok bawaan (starting fill dari BlastGame.StartingFill) sebenarnya sudah ada
+/// sejak BlastGame.Start(), jauh sebelum pemain menekan MAIN. Script ini
+/// menyembunyikan SEMUANYA lebih dulu -- selagi masih tertutup background menu --
+/// lalu tiruan (copy) tiap blok terbang masuk dari segala arah SATU PER SATU dan
+/// terpasang tepat di posisi aslinya. Begitu satu tiruan mendarat, blok asli
+/// dinyalakan dan tiruannya dibuang.
+///
+/// PENTING (bug versi pertama):
+///   Dulu blok asli disembunyikan DI DALAM LaunchOne(), yang dipanggil bertahap.
+///   Akibatnya blok ke-2 sampai terakhir MASIH TERLIHAT selama animasi, jadi
+///   tabung tampak sudah penuh lalu tiruan terbang masuk di atasnya. Sekarang
+///   penyembunyian dilakukan SEKALIGUS lewat HideAllBlocks(), bahkan sebelum
+///   pemain menekan MAIN, sehingga tabung benar-benar mulai KOSONG.
 ///
 /// KENAPA FILE TERPISAH:
-///   BlastGame.cs sudah 33 KB (di atas batas aman push) dan blok aslinya
-///   sudah punya semua yang kita butuh sebagai anak GameObject "Blocks"
-///   (posisi, rotasi, skala, material). Jadi script ini cuma MENIRU anak-anak
-///   itu -- nol perubahan di BlastGame.cs, nol material baru, nol kebocoran.
+///   BlastGame.cs sudah 33 KB (di atas batas aman push) dan blok aslinya sudah
+///   punya semua yang kita butuh sebagai anak GameObject "Blocks" (posisi,
+///   rotasi, skala, material). Jadi script ini cuma MENIRU anak-anak itu --
+///   nol perubahan di BlastGame.cs, nol material baru, nol kebocoran.
 ///
 /// KUNCI PUTARAN:
 ///   Selama animasi, BlastInput dimatikan supaya tabung tidak bisa diputar dan
-///   blok tidak bisa ditaruh. Penguncian dilakukan di LateUpdate() -- yang
-///   SELALU jalan setelah semua Update() -- supaya tidak bisa ditimpa oleh
-///   KubikaMenu yang juga mengatur _input.enabled tiap frame.
+///   blok tidak bisa ditaruh. Penguncian dilakukan di LateUpdate() -- yang SELALU
+///   jalan setelah semua Update() -- supaya tidak bisa ditimpa oleh KubikaMenu
+///   yang juga mengatur _input.enabled.
 /// </summary>
 public class KubikaIntro : MonoBehaviour
 {
@@ -34,9 +40,9 @@ public class KubikaIntro : MonoBehaviour
     // ================= TOMBOL PENYETEL =================
     // Total waktu keberangkatan semua blok. Naikkan kalau mau lebih dramatis.
     const float SPAWN_WINDOW = 0.95f;
-    // Jeda antar keberangkatan dijepit di antara dua nilai ini, jadi papan yang
-    // penuh (60 blok) tidak bikin animasi kepanjangan, dan papan yang sepi
-    // (8 blok) tidak selesai dalam sekejap.
+    // Jeda antar keberangkatan dijepit di antara dua nilai ini, jadi papan penuh
+    // (60 blok) tidak bikin animasi kepanjangan, dan papan sepi (8 blok) tidak
+    // selesai dalam sekejap.
     const float STAGGER_MIN = 0.012f;
     const float STAGGER_MAX = 0.055f;
     // Durasi terbang SATU blok. Sengaja pendek supaya banyak blok melayang bersamaan.
@@ -60,6 +66,7 @@ public class KubikaIntro : MonoBehaviour
     Transform _flyRoot;
 
     bool _played;        // sudah jalan untuk ronde ini?
+    bool _prehidden;     // blok sudah disembunyikan lebih awal?
     bool _seenInputOff;  // pernah melihat input MATI? (anti salah pancing di frame pertama)
     bool _running;
     int _flying;
@@ -87,22 +94,34 @@ public class KubikaIntro : MonoBehaviour
         if (_input == null) _input = FindFirstObjectByType<BlastInput>();
         if (_game == null || _input == null) return;
 
-        if (_running) return;
+        // Catat kalau input pernah MATI. KubikaMenu memadamkan BlastInput di semua
+        // state kecuali Playing, jadi syarat ini pasti terpenuhi di menu utama.
+        // Tanpa syarat ini, di frame pertama scene BlastInput masih menyala dari
+        // serialisasi (sebelum KubikaMenu.Init memadamkannya) dan animasi akan
+        // jalan diam-diam di balik menu. Kalau scene TIDAK punya KubikaMenu sama
+        // sekali, syarat ini tidak akan pernah terpenuhi -- dan itu memang aman,
+        // karena papan akan tetap tampil normal tanpa disembunyikan.
+        if (!_input.enabled) _seenInputOff = true;
 
-        // ===== PEMANCING: saat masuk mode bermain =====
-        // KubikaMenu.SetState menyalakan BlastInput HANYA di state Playing, jadi
-        // "input baru menyala" = "pemain baru menekan MAIN". Kita wajib melihat
-        // input MATI dulu, karena di frame pertama scene BlastInput masih menyala
-        // dari serialisasi sebelum KubikaMenu.Init() memadamkannya -- tanpa syarat
-        // ini animasi akan jalan diam-diam di balik menu utama.
-        if (!_input.enabled) { _seenInputOff = true; return; }
-        if (!_seenInputOff || _played) return;
+        if (_running) return;
+        if (_played || !_seenInputOff) return;
 
         // Hanya untuk papan yang MASIH PERAWAN. Kalau pemain menjeda lalu lanjut,
         // atau sudah menaruh sesuatu, animasi pembuka tidak boleh muncul lagi.
         var core = _game.Core;
         if (core == null || core.GameOver) return;
         if (core.PiecesPlaced != 0 || core.Score != 0) return;
+
+        // ===== KOSONGKAN LEBIH AWAL =====
+        // Dilakukan selagi masih di menu (tabung tertutup background menu), jadi
+        // tidak ada satu frame pun di mana pemain melihat tabung sudah penuh.
+        if (!_prehidden) _prehidden = HideAllBlocks();
+
+        // ===== PEMANCING: saat masuk mode bermain =====
+        // BlastInput menyala HANYA di state Playing, jadi "input baru menyala"
+        // = "pemain baru menekan MAIN".
+        if (!_input.enabled) return;
+        if (!_prehidden) return;
 
         StartCoroutine(IntroRoutine());
     }
@@ -134,7 +153,27 @@ public class KubikaIntro : MonoBehaviour
     void HandleRebuilt()
     {
         _played = false;
+        _prehidden = false;
         _flyRoot = null; // Rebuild() menghapus semua anak, termasuk IntroFly
+    }
+
+    /// <summary>
+    /// Sembunyikan SEMUA blok asli sekaligus. Transform-nya tetap bisa dibaca
+    /// walau GameObject-nya mati, jadi data sasaran tidak hilang.
+    /// Mengembalikan true kalau root "Blocks" sudah ada (walau kosong).
+    /// </summary>
+    bool HideAllBlocks()
+    {
+        if (_game == null) return false;
+        var blocks = _game.transform.Find(BLOCKS_ROOT);
+        if (blocks == null) return false;
+
+        for (int i = 0; i < blocks.childCount; i++)
+        {
+            var t = blocks.GetChild(i);
+            if (t != null && t.gameObject.activeSelf) t.gameObject.SetActive(false);
+        }
+        return true;
     }
 
     IEnumerator IntroRoutine()
@@ -156,7 +195,11 @@ public class KubikaIntro : MonoBehaviour
             for (int i = 0; i < blocks.childCount; i++)
             {
                 var t = blocks.GetChild(i);
-                if (t != null) targets.Add(t);
+                if (t == null) continue;
+                // Jaring pengaman: kalau ada yang lolos dari HideAllBlocks (misal
+                // papan baru dibangun di frame yang sama), matikan sekarang.
+                if (t.gameObject.activeSelf) t.gameObject.SetActive(false);
+                targets.Add(t);
             }
             if (targets.Count == 0) yield break;
 
@@ -221,8 +264,6 @@ public class KubikaIntro : MonoBehaviour
         // dan tidak ada material baru yang perlu dihancurkan.
         var srcMr = real.GetComponent<MeshRenderer>();
         Material mat = (srcMr != null) ? srcMr.sharedMaterial : null;
-
-        real.gameObject.SetActive(false);
 
         var go = new GameObject("IntroBlock");
         go.transform.SetParent(_flyRoot, false);
