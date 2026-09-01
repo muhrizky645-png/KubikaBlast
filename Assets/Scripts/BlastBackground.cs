@@ -7,18 +7,19 @@ using KubikaBlast;
 /// manual ke GameObject) lewat RuntimeInitializeOnLoadMethod, jadi cukup ada file
 /// ini di project. Berjalan di belakang tabung 3D.
 ///
-/// TEMA TERANG:
-///  Palet lama semuanya gelap (bottom 0.03-0.13 alias hampir hitam) sehingga
-///  gameplay terasa muram padahal menunya sudah cerah. Sekarang tiap level
-///  memakai pasangan CERAH: bagian atas warna sedang-pekat, bagian bawah pucat
-///  dan hangat. Susunan ini disengaja: teks HUD di ATAS layar (LEVEL, skor)
-///  berwarna putih/mint, jadi bagian atas TIDAK boleh mendekati putih atau
-///  teksnya hilang. Level 1 sengaja disamakan dengan background menu supaya
+/// TEMA "CERAH TAPI KALEM" — aturan yang dipegang:
+///  1. TIDAK ADA channel warna yang menyentuh 0.90+. Percobaan sebelumnya pakai
+///     0.99/1.00 dan hasilnya silau, terutama bagian bawah layar yang jadi
+///     genangan cahaya tepat di area tray (paling sering dilihat pemain).
+///  2. Saturasi ditahan rendah-sedang (pastel berdebu), bukan warna jenuh.
+///     Warna jenuh + luminance tinggi = mata cepat lelah.
+///  3. Jarak terang atas vs bawah dipersempit. Gradient dengan kontras besar
+///     memaksa mata terus beradaptasi.
+///  4. Bagian ATAS tetap lebih pekat daripada bawah, karena teks HUD (LEVEL,
+///     skor) duduk di atas tanpa kartu di belakangnya — kalau atasnya pucat,
+///     teks putihnya hilang.
+///  Level 1 sengaja disamakan nuansanya dengan background menu supaya
 ///  perpindahan menu -> gameplay terasa menyambung.
-///
-///  Ikut disesuaikan: kilau setelah clear (dulu menggelapkan bagian bawah, di
-///  atas warna terang itu tampak seperti noda) dan warna gelembung (dulu putih,
-///  di atas background terang jadi tak terlihat sama sekali).
 /// </summary>
 public class BlastBackground : MonoBehaviour
 {
@@ -36,30 +37,31 @@ public class BlastBackground : MonoBehaviour
     [Range(0f, 1f)] public float bloomStrength = 0.55f;
 
     // Pasangan warna gradient (atas & bawah) per level; berputar kalau level melebihi jumlah.
-    // Atas = warna sedang-pekat (biar teks HUD putih tetap terbaca).
-    // Bawah = pucat & hangat (biar suasananya ringan dan menyenangkan).
+    // Atas: pastel sedang (0.50-0.84). Bawah: netral hangat lembut (0.74-0.88).
     static readonly Color[] TopColors =
     {
-        new Color(0.42f, 0.74f, 0.96f),   // 1. biru langit  (sama dengan menu)
-        new Color(0.62f, 0.55f, 0.93f),   // 2. lilac
-        new Color(0.30f, 0.78f, 0.74f),   // 3. teal mint
-        new Color(0.98f, 0.66f, 0.44f),   // 4. peach
-        new Color(0.44f, 0.79f, 0.52f),   // 5. hijau segar
-        new Color(0.97f, 0.55f, 0.62f),   // 6. rose
+        new Color(0.52f, 0.68f, 0.80f),   // 1. biru kabut
+        new Color(0.64f, 0.62f, 0.80f),   // 2. lilac lembut
+        new Color(0.50f, 0.72f, 0.70f),   // 3. sage teal
+        new Color(0.84f, 0.68f, 0.58f),   // 4. terracotta lembut
+        new Color(0.58f, 0.74f, 0.60f),   // 5. hijau daun muda
+        new Color(0.84f, 0.66f, 0.68f),   // 6. rose berdebu
     };
     static readonly Color[] BottomColors =
     {
-        new Color(0.99f, 0.90f, 0.76f),   // 1. krem hangat  (sama dengan menu)
-        new Color(0.99f, 0.88f, 0.92f),   // 2. pink pucat
-        new Color(0.93f, 0.97f, 0.82f),   // 3. hijau-kuning pucat
-        new Color(1.00f, 0.93f, 0.80f),   // 4. emas pucat
-        new Color(0.90f, 0.97f, 0.86f),   // 5. mint pucat
-        new Color(0.95f, 0.90f, 0.98f),   // 6. lavender pucat
+        new Color(0.86f, 0.84f, 0.76f),   // 1. pasir lembut
+        new Color(0.86f, 0.82f, 0.85f),   // 2. blush kelabu
+        new Color(0.82f, 0.86f, 0.78f),   // 3. sage pucat
+        new Color(0.87f, 0.83f, 0.74f),   // 4. linen hangat
+        new Color(0.80f, 0.86f, 0.80f),   // 5. mint kelabu
+        new Color(0.84f, 0.82f, 0.88f),   // 6. lavender kelabu
     };
 
     // Gelembung: di atas background terang, putih tidak terlihat. Dipakai tint
-    // biru-tua supaya gelembungnya terbaca sebagai bayangan lembut.
-    static readonly Color BubbleTint = new Color(0.20f, 0.28f, 0.52f);
+    // biru-kelabu supaya gelembungnya terbaca sebagai bayangan lembut, bukan
+    // titik terang yang menarik perhatian.
+    static readonly Color BubbleTint = new Color(0.28f, 0.34f, 0.48f);
+    const float BUBBLE_ALPHA = 0.20f;
 
     BlastGame _game;
     BlastGame _hooked;
@@ -227,7 +229,7 @@ public class BlastBackground : MonoBehaviour
             main.startSize = new ParticleSystem.MinMaxCurve(ph * 0.02f, ph * 0.06f);
             main.maxParticles = 120;
             main.simulationSpace = ParticleSystemSimulationSpace.Local;
-            main.startColor = new Color(BubbleTint.r, BubbleTint.g, BubbleTint.b, 0.26f);
+            main.startColor = new Color(BubbleTint.r, BubbleTint.g, BubbleTint.b, BUBBLE_ALPHA);
 
             var emission = _ps.emission;
             emission.rateOverTime = _baseEmission;
@@ -273,13 +275,13 @@ public class BlastBackground : MonoBehaviour
 
     void ApplyNow()
     {
-        // Kilau setelah clear. Di tema gelap dulu caranya: atas ditarik ke krem,
-        // bawah ditarik ke ungu gelap. Di atas warna terang, menggelapkan bagian
-        // bawah justru terlihat seperti noda kotor. Jadi sekarang KEDUANYA ditarik
-        // ke arah putih — terbaca sebagai kilatan cahaya. Halus, bukan lampu disko.
+        // Kilau setelah clear. Targetnya BUKAN putih murni — kilatan ke putih di
+        // atas background terang terasa seperti lampu blitz. Cukup ditarik sedikit
+        // ke krem pucat, dan bobotnya dikecilkan supaya terasa sebagai "denyut",
+        // bukan silau.
         float b = _bloom * Mathf.Clamp01(bloomStrength);
-        Color top = Color.Lerp(_curTop, new Color(1f, 0.99f, 0.94f), b * 0.50f);
-        Color bot = Color.Lerp(_curBot, Color.white, b * 0.30f);
+        Color top = Color.Lerp(_curTop, new Color(0.92f, 0.91f, 0.86f), b * 0.30f);
+        Color bot = Color.Lerp(_curBot, new Color(0.92f, 0.91f, 0.88f), b * 0.16f);
         Apply(top, bot);
     }
 
@@ -307,10 +309,8 @@ public class BlastBackground : MonoBehaviour
         if (_ps != null)
         {
             var main = _ps.main;
-            // Dulu: Lerp(top, Color.white, 0.35f) -> gelembung putih, hilang di
-            // background terang. Sekarang ditarik ke tint gelap supaya kelihatan.
             Color pc = Color.Lerp(top, BubbleTint, 0.55f);
-            pc.a = 0.26f;
+            pc.a = BUBBLE_ALPHA;
             main.startColor = pc;
         }
     }
