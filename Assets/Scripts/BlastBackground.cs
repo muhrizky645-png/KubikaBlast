@@ -57,11 +57,19 @@ public class BlastBackground : MonoBehaviour
         new Color(0.84f, 0.82f, 0.88f),   // 6. lavender kelabu
     };
 
-    // Gelembung: di atas background terang, putih tidak terlihat. Dipakai tint
-    // biru-kelabu supaya gelembungnya terbaca sebagai bayangan lembut, bukan
-    // titik terang yang menarik perhatian.
-    static readonly Color BubbleTint = new Color(0.28f, 0.34f, 0.48f);
-    const float BUBBLE_ALPHA = 0.20f;
+    // ===== GELEMBUNG =====
+    // Di latar terang, gelembung PUTIH tidak terlihat. Jadi dipakai tint gelap
+    // supaya terbaca sebagai bayangan lembut yang naik.
+    //
+    // PENTING soal alpha: alpha akhir = startColor.a * colorOverLifetime.a.
+    // Dulu 0.20 * 0.5 = 0.10 dan gelembungnya praktis hilang. Sekarang kurva
+    // colorOverLifetime dipakai MURNI sebagai fade masuk/keluar (plateau = 1),
+    // sehingga BUBBLE_ALPHA di bawah ini benar-benar jadi opacity puncaknya.
+    static readonly Color BubbleTint = new Color(0.22f, 0.30f, 0.46f);
+    const float BUBBLE_ALPHA = 0.24f;
+    // Seberapa kuat tint dipertahankan terhadap warna latar. Dulu 0.55 — artinya
+    // 45% warna gelembung ditarik kembali ke warna latar, jadi menyatu & lenyap.
+    const float BUBBLE_TINT_KEEP = 0.85f;
 
     BlastGame _game;
     BlastGame _hooked;
@@ -203,11 +211,7 @@ public class BlastBackground : MonoBehaviour
             mr.sharedMaterial = _mat;
         }
 
-        // ---- Gelembung mengambang: DIHIDUPKAN lagi ----
-        // Dulu terkunci di balik `if (false)`. Komentar aslinya menjelaskan cara
-        // menghidupkannya dengan aman: ganti gerbangnya DAN tambahkan vel.z.
-        // Tanpa vel.z, velocityOverLifetime punya kurva X & Y tapi Z-nya belum
-        // di-set, dan itulah kenapa sistem ini dulu dimatikan.
+        // ---- Gelembung mengambang ----
         if (enableBubbles && _ps == null)
         {
             float pdist = gdist * 0.82f;
@@ -226,7 +230,9 @@ public class BlastBackground : MonoBehaviour
             main.loop = true;
             main.startLifetime = 8f;
             main.startSpeed = 0f;
-            main.startSize = new ParticleSystem.MinMaxCurve(ph * 0.02f, ph * 0.06f);
+            // Sedikit diperbesar: di latar terang, gelembung kecil dengan opacity
+            // rendah lebih mudah tenggelam daripada di latar gelap.
+            main.startSize = new ParticleSystem.MinMaxCurve(ph * 0.03f, ph * 0.08f);
             main.maxParticles = 120;
             main.simulationSpace = ParticleSystemSimulationSpace.Local;
             main.startColor = new Color(BubbleTint.r, BubbleTint.g, BubbleTint.b, BUBBLE_ALPHA);
@@ -243,8 +249,10 @@ public class BlastBackground : MonoBehaviour
             vel.space = ParticleSystemSimulationSpace.Local;
             vel.y = new ParticleSystem.MinMaxCurve(ph * 0.06f, ph * 0.12f);
             vel.x = new ParticleSystem.MinMaxCurve(-ph * 0.01f, ph * 0.01f);
-            vel.z = new ParticleSystem.MinMaxCurve(0f, 0f);   // <- baris yang dulu hilang
+            vel.z = new ParticleSystem.MinMaxCurve(0f, 0f);
 
+            // Kurva ini MURNI fade masuk/keluar. Plateau-nya 1 (dulu 0.5) supaya
+            // tidak mengurangi BUBBLE_ALPHA untuk kedua kalinya.
             var colOverLife = _ps.colorOverLifetime;
             colOverLife.enabled = true;
             var grad = new Gradient();
@@ -253,8 +261,8 @@ public class BlastBackground : MonoBehaviour
                 new[]
                 {
                     new GradientAlphaKey(0f, 0f),
-                    new GradientAlphaKey(0.5f, 0.25f),
-                    new GradientAlphaKey(0.5f, 0.75f),
+                    new GradientAlphaKey(1f, 0.20f),
+                    new GradientAlphaKey(1f, 0.80f),
                     new GradientAlphaKey(0f, 1f),
                 });
             colOverLife.color = grad;
@@ -309,7 +317,9 @@ public class BlastBackground : MonoBehaviour
         if (_ps != null)
         {
             var main = _ps.main;
-            Color pc = Color.Lerp(top, BubbleTint, 0.55f);
+            // Ambil sedikit nuansa warna level, tapi tint gelapnya tetap dominan
+            // supaya gelembung tidak menyatu dengan latar.
+            Color pc = Color.Lerp(top, BubbleTint, BUBBLE_TINT_KEEP);
             pc.a = BUBBLE_ALPHA;
             main.startColor = pc;
         }
