@@ -6,6 +6,11 @@
 #define USE_NEW_INPUT
 #endif
 
+// BAGIAN 1 dari 2 (logika input, penempatan, rotasi).
+// Bagian visual (ghost / preview clear / blok melayang) + abstraksi tombol ada
+// di BlastInputVisuals.cs. Dipecah jadi partial class supaya tiap file kecil
+// dan aman saat di-push.
+
 using System.Collections.Generic;
 using UnityEngine;
 #if USE_NEW_INPUT
@@ -19,31 +24,35 @@ using KubikaBlast;
 ///
 /// PENTING: DefaultExecutionOrder > 0 supaya BlastGame.Start() (Rebuild yang
 /// menghapus semua anak Game) jalan LEBIH DULU daripada BlastInput.Start().
-/// Ghost & preview root juga dibuat ulang otomatis kalau hilang (setelah Rebuild).
+/// Ghost &amp; preview root juga dibuat ulang otomatis kalau hilang (setelah Rebuild).
 ///
 /// MODEL MURNI SERET-DARI-TRAY (HP) ala Block Blast:
 ///  1. TEKAN jari TEPAT di potongan tray yang diinginkan (BUKAN di tabung).
 ///  2. Tanpa melepas, SERET jari ke tabung. Selama menyeret, potongan tampak
-///     "MELAYANG". Saat sudah menemukan sel tujuan valid, blok melayang digambar
-///     MELENGKUNG di permukaan tabung (sinkron dgn bayangan) & terangkat sedikit.
-///     Saat belum ada sel tujuan valid, blok jadi OVERLAY rata mengikuti jari.
-///     Di tabung TIDAK ada balok berwarna kembar; yang muncul cuma INDIKATOR SEL
-///     TUJUAN yang halus (highlight tipis) dan HANYA saat posisi PAS.
-///  3. Kalau posisi seret membuat cincin/kolom PENUH -> sel yang akan hancur
+///     "MELAYANG" DI ATAS JARI (lihat "TITIK INCAR" di bawah).
+///  3. Kalau posisi seret membuat cincin/kolom PENUH -&gt; sel yang akan hancur
 ///     ikut MENYALA (preview clear ala Block Blast).
-///  4. LEPAS jari di sel valid -> potongan ditaruh. Lepas di luar tabung = batal.
+///  4. LEPAS jari -&gt; potongan ditaruh di sel tujuan. Lepas di luar tabung = batal.
 ///  * Menekan/menyeret LANGSUNG di tabung TIDAK menaruh apa pun. Menaruh HANYA
 ///    sah lewat gestur seret yang DIMULAI dari slot tray.
 ///
-/// POLESAN UX PENEMPATAN (baru):
-///  - Toleransi snap: kalau titik jari tak pas, cari sel valid TERDEKAT.
+/// TITIK INCAR DIANGKAT DI ATAS JARI (perbaikan main di HP):
+///  Dulu sel tujuan dihitung TEPAT di titik jari, jadi blok selalu ketutup jari
+///  dan susah dilihat. Sekarang raycast pakai PointerAimPosition() = titik jari
+///  + offset ke ATAS sebesar aimOffsetCells (satuan SEL, jadi ikut skala zoom).
+///  Hasilnya: jari tetap di bawah, blok &amp; indikator sel tujuan ada di atas jari
+///  sehingga jelas kelihatan. Atur lewat Inspector: liftAimAboveFinger,
+///  aimOffsetCells, maxAimOffsetFraction.
+///
+/// POLESAN UX PENEMPATAN:
+///  - Toleransi snap: kalau titik incar tak pas, cari sel valid TERDEKAT.
 ///  - Auto-putar tabung saat jari dekat tepi layar (jangkau sisi tersembunyi).
 ///
 /// Putar TABUNG: SATU JARI (seret di area tabung) / DUA JARI / drag KLIK-KANAN / Q-E / panah.
 /// </summary>
 [RequireComponent(typeof(BlastGame))]
 [DefaultExecutionOrder(1000)]
-public class BlastInput : MonoBehaviour
+public partial class BlastInput : MonoBehaviour
 {
     [Header("Kecepatan putar tabung")]
     public float keyRotateSpeed = 90f;    // derajat / detik (Q/E, panah kiri-kanan)
@@ -59,6 +68,18 @@ public class BlastInput : MonoBehaviour
     // Jarak minimal (pixel) jari harus bergerak agar dihitung MENYERET, bukan tap.
     public float dragThreshold = 12f;
 
+    [Header("Titik incar di ATAS jari (anti ketutup jempol)")]
+    // Inti perbaikan main di HP: sel tujuan TIDAK lagi dihitung tepat di titik
+    // jari, tapi di titik yang lebih TINGGI. Jadi jari boleh tetap di bawah,
+    // sementara blok & indikator sel tujuan kelihatan jelas di atas jari.
+    public bool liftAimAboveFinger = true;
+    // Besar jarak angkat dalam satuan SEL (bukan pixel), supaya konsisten di
+    // semua ukuran layar & tingkat zoom kamera. 1.8 = sekitar dua blok di atas jari.
+    public float aimOffsetCells = 1.8f;
+    // Batas aman: offset tidak boleh lebih dari sekian bagian tinggi layar,
+    // supaya di layar pendek titik incar tidak kebablasan keluar layar.
+    public float maxAimOffsetFraction = 0.22f;
+
     [Header("Indikator sel tujuan (gaya Block Blast)")]
     // Highlight di sel tempat potongan akan mendarat. Alpha dinaikkan biar lebih TEGAS
     // (gampang kelihatan sel tujuannya). Dipakai HANYA saat posisi PAS.
@@ -69,12 +90,13 @@ public class BlastInput : MonoBehaviour
     // Warna nyala untuk sel yang AKAN hancur (baris/kolom penuh).
     public Color clearPreviewColor = new Color(1f, 0.95f, 0.35f, 0.55f);
 
-    [Header("Blok melayang saat diseret (poin 1)")]
+    [Header("Blok melayang saat diseret")]
     // Blok melayang: MELENGKUNG di tabung saat terkunci ke ghost, atau OVERLAY layar
     // rata (fallback) saat belum ada sel tujuan valid.
     public bool enableHeldPiece = true;
-    // Offset ke ATAS (pixel) supaya blok melayang di atas jari, tak ketutup jari.
-    // Dipakai HANYA saat FALLBACK overlay (jari belum di sel valid).
+    // LEGACY: offset ke atas (pixel) untuk mode fallback overlay. Sekarang HANYA
+    // dipakai kalau liftAimAboveFinger = false. Kalau true, offset diambil dari
+    // aimOffsetCells supaya mode melengkung & mode overlay tidak lompat-lompat.
     public float heldScreenYOffset = 90f;
     // Samakan ukuran blok melayang dengan blok ASLI di tabung (seperti "bayangan" blok).
     // Dipakai HANYA pada mode fallback overlay.
@@ -85,14 +107,12 @@ public class BlastInput : MonoBehaviour
     public float heldPixelSize = 90f;
     // Jarak overlay dari kamera (unit dunia). Kecil = terasa menempel di layar. Mode fallback.
     public float heldDepth = 2f;
-    // OPSI #3: kunci blok melayang ke posisi ghost (sel tujuan). Nilai = seberapa
-    // tinggi (dalam satuan SEL) blok terangkat di atas sel tujuan agar tak ketutup jari.
-    // Diturunkan (0.6 -> 0.35) supaya posisi jatuhnya terasa lebih pas/intuitif.
-    // 0 = pas di ghost.
+    // Seberapa tinggi (dalam satuan SEL) blok terangkat RADIAL dari permukaan tabung,
+    // supaya terlihat melayang di atas bayangannya. 0 = pas di ghost.
     public float heldGhostLiftCells = 0.35f;
 
     [Header("Toleransi snap (magnet ke sel valid terdekat)")]
-    // Kalau titik jari tak pas di sel valid, cari sel valid TERDEKAT dalam radius ini.
+    // Kalau titik incar tak pas di sel valid, cari sel valid TERDEKAT dalam radius ini.
     public bool snapToNearestValid = true;
     public int snapSearchRadius = 2;      // berapa sel ke segala arah yang dicari
 
@@ -110,7 +130,7 @@ public class BlastInput : MonoBehaviour
     readonly List<GameObject> _ghosts = new List<GameObject>();
     readonly List<GameObject> _previews = new List<GameObject>();
 
-    // blok melayang (poin 1): TIDAK di-parent ke tabung supaya tak ikut berputar.
+    // blok melayang: TIDAK di-parent ke tabung supaya tak ikut berputar.
     Transform _heldRoot;
     readonly List<GameObject> _held = new List<GameObject>();
     readonly Dictionary<int, Material> _solidMats = new Dictionary<int, Material>();
@@ -177,6 +197,8 @@ public class BlastInput : MonoBehaviour
         bool held = PointerHeld();         // jari/klik-kiri sedang menekan?
 
         // ---- MULAI gestur: hanya sah kalau DIMULAI di slot tray ----
+        // Catatan: pakai PointerPosition() MENTAH (bukan aim) karena ini soal
+        // jari benar-benar menyentuh slot tray yang mana.
         if (PointerPressedThisFrame())
         {
             _pressStartPos = PointerPosition();
@@ -208,8 +230,8 @@ public class BlastInput : MonoBehaviour
 
         if (active && PointerToCell(out col, out row))
         {
-            // Pusatkan potongan tepat di bawah jari (gaya Block Blast) supaya
-            // indikator tujuan TIDAK geser ke kanan. Anchor = sel jari - centroid.
+            // Pusatkan potongan tepat di titik incar supaya indikator tujuan
+            // TIDAK geser. Anchor = sel titik incar - centroid potongan.
             PieceCentroidOffset(piece, out int offX, out int offY);
             int baseCol = core.Wrap(col - offX);
             int baseRow = row - offY;
@@ -236,7 +258,7 @@ public class BlastInput : MonoBehaviour
 
         // Indikator sel tujuan (highlight halus) HANYA saat posisi PAS.
         SetGhost(haveCell && canPlace, piece, col, row);
-        // Poin 1: blok melayang mengikuti jari selama menyeret dari tray.
+        // Blok melayang mengikuti titik incar selama menyeret dari tray.
         SetHeldPiece(enableHeldPiece && active, piece);
 
         // ---- preview CLEAR: sel yang akan hancur menyala ----
@@ -250,8 +272,12 @@ public class BlastInput : MonoBehaviour
         {
             bool draggedEnough = !ghostOnlyWhileDragging || _isDragging;
             bool trayOk = !requireTrayDrag || _dragFromTray;
+            // PENTING: cek "terhalang UI" pakai TITIK INCAR, bukan titik jari.
+            // Karena titik incar diangkat ke atas, jari sering masih berada di
+            // area tray/tombol saat menaruh baris bawah. Yang menentukan sah/tidak
+            // adalah tempat BLOK-nya, bukan tempat jarinya.
             if (draggedEnough && trayOk && _hasLast && _lastCanPlace && piece != null
-                && !BlastUI.PointerBlocksPlacement(PointerPosition()))
+                && !BlastUI.PointerBlocksPlacement(PointerAimPosition()))
             {
                 if (_game.TryPlace(_current, _lastCol, _lastRow))
                 {
@@ -270,7 +296,44 @@ public class BlastInput : MonoBehaviour
         }
     }
 
-    // Centroid (dibulatkan) offset sel potongan -> dipakai memusatkan di jari.
+    // ================= TITIK INCAR (AIM) =================
+    // Konversi: 1 unit dunia di permukaan DEPAN tabung = berapa pixel di layar.
+    // Dipakai untuk menghitung offset aim & ukuran blok melayang mode overlay.
+    float PixelsPerWorldUnitAtTube()
+    {
+        if (_cam == null || _game == null) return 0f;
+        Vector3 tubeCenter = _game.transform.position
+                             + Vector3.up * (_game.height * _game.cellHeight * 0.5f);
+        float dTube = Mathf.Max(0.1f,
+            Vector3.Distance(_cam.transform.position, tubeCenter) - _game.Radius);
+        float tanV = Mathf.Tan(_cam.fieldOfView * 0.5f * Mathf.Deg2Rad);
+        float wpp = (2f * dTube * tanV) / Mathf.Max(1, Screen.height);
+        return wpp > 1e-6f ? 1f / wpp : 0f;
+    }
+
+    // Berapa PIXEL titik incar diangkat di atas jari.
+    // Dihitung dari aimOffsetCells (satuan sel) supaya konsisten di semua zoom,
+    // lalu dibatasi maxAimOffsetFraction supaya tidak kebablasan di layar pendek.
+    float AimYOffsetPixels()
+    {
+        if (!liftAimAboveFinger || _game == null) return 0f;
+        float px = _game.cellHeight * Mathf.Max(0f, aimOffsetCells) * PixelsPerWorldUnitAtTube();
+        float maxPx = Screen.height * Mathf.Clamp01(maxAimOffsetFraction);
+        return Mathf.Clamp(px, 0f, maxPx);
+    }
+
+    // Titik yang dipakai untuk MENGINCAR sel tujuan = titik jari + offset ke atas.
+    // Inilah kunci supaya blok tidak lagi ketutup jari.
+    Vector2 PointerAimPosition()
+    {
+        Vector2 p = PointerPosition();
+        p.y += AimYOffsetPixels();
+        // jangan sampai keluar batas atas layar
+        p.y = Mathf.Min(p.y, Screen.height - 1f);
+        return p;
+    }
+
+    // Centroid (dibulatkan) offset sel potongan -> dipakai memusatkan di titik incar.
     void PieceCentroidOffset(BlastCore.Piece piece, out int offX, out int offY)
     {
         float ax = 0f, ay = 0f;
@@ -283,7 +346,7 @@ public class BlastInput : MonoBehaviour
 
     // ================= TOLERANSI SNAP =================
     // Cari anchor VALID terdekat dari (baseCol,baseRow) dalam radius snapSearchRadius.
-    // Skor = jarak^2 dari anchor jari; posisi terdekat diutamakan. Return posisi terbaik.
+    // Skor = jarak^2 dari anchor titik incar; posisi terdekat diutamakan.
     bool TryFindPlacement(BlastCore.Piece piece, int baseCol, int baseRow,
                           out int bestCol, out int bestRow)
     {
@@ -306,7 +369,7 @@ public class BlastInput : MonoBehaviour
                 int rr = baseRow + dr;
                 if (!core.CanPlace(piece, cc, rr)) continue;
 
-                float score = dc * dc + dr * dr; // makin dekat jari makin diutamakan
+                float score = dc * dc + dr * dr; // makin dekat titik incar makin diutamakan
 
                 if (score < best) { best = score; bestCol = cc; bestRow = rr; found = true; }
             }
@@ -351,57 +414,6 @@ public class BlastInput : MonoBehaviour
         return result;
     }
 
-    void SetClearPreview(HashSet<(int, int)> cells)
-    {
-        EnsurePreviewRoot();
-        if (cells == null || cells.Count == 0)
-        {
-            for (int i = 0; i < _previews.Count; i++)
-                if (_previews[i] != null) _previews[i].SetActive(false);
-            return;
-        }
-
-        EnsurePreviews(cells.Count);
-        int used = 0;
-        foreach (var (c, r) in cells)
-        {
-            var g = _previews[used++];
-            g.SetActive(true);
-            g.transform.localPosition = _game.CellToWorld(c, r);
-            g.transform.localRotation = _game.CellRotation(c);
-            // sedikit lebih besar dari blok supaya "membungkus" -> efek menyala.
-            g.transform.localScale = new Vector3(_game.cellWidth * _game.gap * 1.06f,
-                                                 _game.cellHeight * _game.gap * 1.06f,
-                                                 _game.blockDepth * 1.14f);
-            g.GetComponent<MeshRenderer>().sharedMaterial = _matPreview;
-        }
-        for (int i = used; i < _previews.Count; i++)
-            if (_previews[i] != null) _previews[i].SetActive(false);
-    }
-
-    void EnsurePreviews(int n)
-    {
-        while (_previews.Count < n)
-        {
-            var go = new GameObject("ClearCube");
-            go.transform.SetParent(_previewRoot, false);
-            var mf = go.AddComponent<MeshFilter>();
-            mf.sharedMesh = _game.CellMesh;
-            go.AddComponent<MeshRenderer>();
-            go.SetActive(false);
-            _previews.Add(go);
-        }
-    }
-
-    void EnsurePreviewRoot()
-    {
-        if (_previewRoot != null) return;
-        var pr = new GameObject("ClearPreview").transform;
-        pr.SetParent(_game.transform, false); // anak Game -> ikut transform tabung
-        _previewRoot = pr;
-        _previews.Clear();
-    }
-
     // ================= ROTASI TABUNG =================
     void HandleRotation()
     {
@@ -426,6 +438,7 @@ public class BlastInput : MonoBehaviour
         if (Mathf.Abs(twoFingerX) > 0f) deltaDeg += -twoFingerX * dragRotateSpeed;
 
         // ---- Putar tabung pakai 1 JARI: seret di area tabung (bukan slot tray/UI) ----
+        // Pakai titik jari MENTAH: ini soal jari menyentuh apa, bukan soal aim.
         if (oneFingerRotate)
         {
             if (PointerPressedThisFrame() && !MultiTouchActive())
@@ -510,6 +523,7 @@ public class BlastInput : MonoBehaviour
     }
 
     // ================= RAYCAST -> SEL GRID =================
+    // Raycast dari TITIK INCAR (di atas jari), bukan dari titik jari langsung.
     bool PointerToCell(out int col, out int row)
     {
         col = 0; row = 0;
@@ -518,7 +532,7 @@ public class BlastInput : MonoBehaviour
         float R = _game.Radius;
         if (R <= 0f) return false;
 
-        Ray ray = _cam.ScreenPointToRay(PointerPosition());
+        Ray ray = _cam.ScreenPointToRay(PointerAimPosition());
 
         Vector3 o = _game.transform.InverseTransformPoint(ray.origin);
         Vector3 d = _game.transform.InverseTransformDirection(ray.direction);
@@ -547,412 +561,5 @@ public class BlastInput : MonoBehaviour
         if (rr < 0 || rr >= _game.height) return false;
         row = rr;
         return true;
-    }
-
-    // ================= INDIKATOR SEL TUJUAN (highlight halus) =================
-    void EnsureGhostRoot()
-    {
-        if (_ghostRoot != null) return;
-        var gr = new GameObject("Ghost").transform;
-        gr.SetParent(_game.transform, false);
-        _ghostRoot = gr;
-        _ghosts.Clear();
-    }
-
-    void SetGhost(bool show, BlastCore.Piece piece, int col, int row)
-    {
-        if (!show || piece == null)
-        {
-            for (int i = 0; i < _ghosts.Count; i++)
-                if (_ghosts[i] != null) _ghosts[i].SetActive(false);
-            return;
-        }
-
-        EnsureGhosts(piece.Cells.Length);
-
-        int used = 0;
-        foreach (var (dx, dy) in piece.Cells)
-        {
-            int r = row + dy;
-            if (r < 0 || r >= _game.height) continue;
-            int c = _game.Core.Wrap(col + dx);
-
-            var g = _ghosts[used++];
-            g.SetActive(true);
-            g.transform.localPosition = _game.CellToWorld(c, r);
-            g.transform.localRotation = _game.CellRotation(c);
-            // highlight "membungkus" sel tujuan (sedikit lebih besar dari blok).
-            // Dibikin lebih tebal biar indikatornya lebih tegas.
-            g.transform.localScale = new Vector3(_game.cellWidth * _game.gap * 1.08f,
-                                                 _game.cellHeight * _game.gap * 1.08f,
-                                                 _game.blockDepth * 1.12f);
-            g.GetComponent<MeshRenderer>().sharedMaterial = _matGhost;
-        }
-        for (int i = used; i < _ghosts.Count; i++)
-            if (_ghosts[i] != null) _ghosts[i].SetActive(false);
-    }
-
-    void EnsureGhosts(int n)
-    {
-        while (_ghosts.Count < n)
-        {
-            var go = new GameObject("GhostCube");
-            go.transform.SetParent(_ghostRoot, false);
-            var mf = go.AddComponent<MeshFilter>();
-            mf.sharedMesh = _game.CellMesh;
-            go.AddComponent<MeshRenderer>();
-            go.SetActive(false);
-            _ghosts.Add(go);
-        }
-    }
-
-    // ================= BLOK MELAYANG (poin 1) =================
-    void EnsureHeldRoot()
-    {
-        if (_heldRoot != null) return;
-        var hr = new GameObject("HeldPiece").transform;
-        // sengaja TANPA parent tabung supaya tidak ikut berputar bersama tabung.
-        _heldRoot = hr;
-        _held.Clear();
-    }
-
-    // Blok melayang punya DUA mode:
-    //  (A) MELENGKUNG di tabung (saat terkunci ke ghost) -> tiap kubus dipetakan ke
-    //      permukaan silinder pakai CellToWorld + CellRotation (persis seperti ghost),
-    //      lalu diangkat RADIAL keluar sejauh heldGhostLiftCells. Hasilnya lengkungnya
-    //      SINKRON dengan bayangan, apa pun angle/zoom kamera.
-    //  (B) OVERLAY LAYAR rata (fallback saat belum ada sel tujuan valid) -> mengikuti
-    //      jari, menghadap kamera, seukuran blok asli.
-    void SetHeldPiece(bool show, BlastCore.Piece piece)
-    {
-        EnsureHeldRoot();
-        if (!show || piece == null || _cam == null)
-        {
-            for (int i = 0; i < _held.Count; i++)
-                if (_held[i] != null) _held[i].SetActive(false);
-            return;
-        }
-
-        EnsureHeld(piece.Cells.Length);
-
-        bool lockedToGhost = _hasLast && _lastCanPlace;
-        if (lockedToGhost) RenderHeldCurved(piece);   // (A) melengkung di tabung
-        else RenderHeldFlatOverlay(piece);            // (B) overlay layar mengikuti jari
-    }
-
-    // (A) Blok melayang MELENGKUNG: dipetakan ke permukaan tabung seperti ghost,
-    // lalu diangkat radial keluar biar "melayang" di atas bayangan & tak ketutup jari.
-    void RenderHeldCurved(BlastCore.Piece piece)
-    {
-        float lift = _game.cellHeight * Mathf.Max(0f, heldGhostLiftCells);
-
-        int used = 0;
-        foreach (var (dx, dy) in piece.Cells)
-        {
-            int r = _lastRow + dy;
-            if (r < 0 || r >= _game.height) continue;
-            int c = _game.Core.Wrap(_lastCol + dx);
-
-            Vector3 localPos = _game.CellToWorld(c, r);
-            Quaternion localRot = _game.CellRotation(c);
-            Vector3 outward = localRot * Vector3.forward; // arah radial keluar (ruang lokal tabung)
-            localPos += outward * lift;                   // angkat menjauh dari permukaan
-
-            var g = _held[used++];
-            g.SetActive(true);
-            // pakai transform tabung -> ikut posisi & rotasi tabung (sinkron dgn ghost).
-            g.transform.position = _game.transform.TransformPoint(localPos);
-            g.transform.rotation = _game.transform.rotation * localRot;
-            g.transform.localScale = new Vector3(_game.cellWidth * _game.gap,
-                                                 _game.cellHeight * _game.gap,
-                                                 _game.blockDepth);
-            g.GetComponent<MeshRenderer>().sharedMaterial = SolidMat(piece.Color);
-        }
-        for (int i = used; i < _held.Count; i++)
-            if (_held[i] != null) _held[i].SetActive(false);
-    }
-
-    // (B) Fallback OVERLAY LAYAR rata: dipakai saat belum ada sel tujuan valid.
-    // Tata letak sel dihitung dalam PIXEL layar (relatif titik acuan = jari + offset),
-    // diproyeksikan dekat kamera (heldDepth) & selalu menghadap kamera -> tampak rata.
-    void RenderHeldFlatOverlay(BlastCore.Piece piece)
-    {
-        int len = piece.Cells.Length;
-        float avgX = 0f, avgY = 0f;
-        foreach (var (dx, dy) in piece.Cells) { avgX += dx; avgY += dy; }
-        if (len > 0) { avgX /= len; avgY /= len; }
-
-        float d = Mathf.Max(0.05f, heldDepth);
-        float tanV = Mathf.Tan(_cam.fieldOfView * 0.5f * Mathf.Deg2Rad);
-        float invH = 1f / Mathf.Max(1, Screen.height);
-
-        // Ukuran sel blok melayang (pixel). Kalau matchBlockSize: hitung supaya
-        // apparent size-nya SAMA dengan blok asli di permukaan DEPAN tabung.
-        float effPx = heldPixelSize;
-        if (matchBlockSize)
-        {
-            Vector3 tubeCenter = _game.transform.position
-                                 + Vector3.up * (_game.height * _game.cellHeight * 0.5f);
-            float dTube = Mathf.Max(0.1f,
-                Vector3.Distance(_cam.transform.position, tubeCenter) - _game.Radius);
-            float wppTube = (2f * dTube * tanV) * invH;
-            if (wppTube > 1e-6f) effPx = (_game.cellWidth * _game.gap) / wppTube;
-        }
-        effPx *= Mathf.Max(0.05f, heldSizeMultiplier);
-
-        Vector2 anchor = PointerPosition();
-        anchor.y += heldScreenYOffset;
-
-        float worldPerPixel = (2f * d * tanV) * invH;
-        float cube = effPx * worldPerPixel; // sisi kubus di dunia (~effPx px di layar)
-
-        Quaternion rot = _cam.transform.rotation; // menghadap kamera -> tampak rata di layar
-
-        // Material: warna asli potongan.
-        Material mat = SolidMat(piece.Color);
-
-        int used = 0;
-        foreach (var (dx, dy) in piece.Cells)
-        {
-            // posisi sel di LAYAR (pixel), lalu proyeksikan ke dunia di depan kamera.
-            Vector2 sp = anchor + new Vector2((dx - avgX) * effPx,
-                                              (dy - avgY) * effPx);
-            Vector3 world = _cam.ScreenToWorldPoint(new Vector3(sp.x, sp.y, d));
-
-            var g = _held[used++];
-            g.SetActive(true);
-            g.transform.position = world;
-            g.transform.rotation = rot;
-            g.transform.localScale = new Vector3(cube * _game.gap, cube * _game.gap, cube * 0.6f);
-            g.GetComponent<MeshRenderer>().sharedMaterial = mat;
-        }
-        for (int i = used; i < _held.Count; i++)
-            if (_held[i] != null) _held[i].SetActive(false);
-    }
-
-    void EnsureHeld(int n)
-    {
-        while (_held.Count < n)
-        {
-            var go = new GameObject("HeldCube");
-            go.transform.SetParent(_heldRoot, false);
-            var mf = go.AddComponent<MeshFilter>();
-            mf.sharedMesh = _game.CellMesh;
-            go.AddComponent<MeshRenderer>();
-            go.SetActive(false);
-            _held.Add(go);
-        }
-    }
-
-    // Material SOLID (opaque) berwarna asli potongan, dipakai untuk blok melayang.
-    Material SolidMat(int color)
-    {
-        if (_solidMats.TryGetValue(color, out var found) && found != null) return found;
-        var shader = Shader.Find("Universal Render Pipeline/Lit");
-        if (shader == null) shader = Shader.Find("Standard");
-        var m = new Material(shader);
-        Color c = (_game.palette != null && color >= 0 && color < _game.palette.Length)
-                  ? _game.palette[color] : Color.white;
-        if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", c);
-        m.color = c;
-        _solidMats[color] = m;
-        return m;
-    }
-
-    // Material semi-transparan (URP Lit; fallback Standard). withEmission -> menyala.
-    Material MakeGhostMaterial(Color col, bool withEmission)
-    {
-        var shader = Shader.Find("Universal Render Pipeline/Lit");
-        if (shader == null) shader = Shader.Find("Standard");
-        var m = new Material(shader);
-
-        if (m.HasProperty("_Surface")) m.SetFloat("_Surface", 1f); // transparan
-        m.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
-        m.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
-        m.SetInt("_ZWrite", 0);
-        m.DisableKeyword("_SURFACE_TYPE_OPAQUE");
-        m.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
-        m.EnableKeyword("_ALPHABLEND_ON");
-        m.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
-
-        if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", col);
-        m.color = col;
-
-        if (withEmission && m.HasProperty("_EmissionColor"))
-        {
-            m.EnableKeyword("_EMISSION");
-            // Emission dinaikkan (0.9 -> 1.7) biar indikator lebih tegas/nyala.
-            m.SetColor("_EmissionColor", new Color(col.r, col.g, col.b) * 1.7f);
-        }
-        return m;
-    }
-
-    // ==================================================================
-    // ============ ABSTRAKSI INPUT (lama vs baru) ======================
-    // ==================================================================
-    Vector2 PointerPosition()
-    {
-#if USE_NEW_INPUT
-        var m = Mouse.current;
-        if (m != null) return m.position.ReadValue();
-        var ts = Touchscreen.current;
-        if (ts != null && ts.primaryTouch != null) return ts.primaryTouch.position.ReadValue();
-        return Vector2.zero;
-#else
-        return Input.mousePosition;
-#endif
-    }
-
-    bool PointerPressedThisFrame()
-    {
-#if USE_NEW_INPUT
-        var m = Mouse.current;
-        if (m != null && m.leftButton.wasPressedThisFrame) return true;
-        var ts = Touchscreen.current;
-        if (ts != null && ts.primaryTouch != null && ts.primaryTouch.press.wasPressedThisFrame) return true;
-        return false;
-#else
-        return Input.GetMouseButtonDown(0);
-#endif
-    }
-
-    bool PointerHeld()
-    {
-#if USE_NEW_INPUT
-        var m = Mouse.current;
-        if (m != null && m.leftButton.isPressed) return true;
-        var ts = Touchscreen.current;
-        if (ts != null && ts.primaryTouch != null && ts.primaryTouch.press.isPressed) return true;
-        return false;
-#else
-        return Input.GetMouseButton(0);
-#endif
-    }
-
-    bool PointerReleased()
-    {
-#if USE_NEW_INPUT
-        var m = Mouse.current;
-        if (m != null && m.leftButton.wasReleasedThisFrame) return true;
-        var ts = Touchscreen.current;
-        if (ts != null && ts.primaryTouch != null && ts.primaryTouch.press.wasReleasedThisFrame) return true;
-        return false;
-#else
-        return Input.GetMouseButtonUp(0);
-#endif
-    }
-
-    bool MultiTouchActive()
-    {
-#if USE_NEW_INPUT
-        var ts = Touchscreen.current;
-        if (ts == null) return false;
-        int n = 0;
-        foreach (var t in ts.touches) if (t.isInProgress) n++;
-        return n >= 2;
-#else
-        return Input.touchCount >= 2;
-#endif
-    }
-
-    bool RightDown()
-    {
-#if USE_NEW_INPUT
-        return Mouse.current != null && Mouse.current.rightButton.wasPressedThisFrame;
-#else
-        return Input.GetMouseButtonDown(1);
-#endif
-    }
-
-    bool RightUp()
-    {
-#if USE_NEW_INPUT
-        return Mouse.current != null && Mouse.current.rightButton.wasReleasedThisFrame;
-#else
-        return Input.GetMouseButtonUp(1);
-#endif
-    }
-
-    bool RightHeld()
-    {
-#if USE_NEW_INPUT
-        return Mouse.current != null && Mouse.current.rightButton.isPressed;
-#else
-        return Input.GetMouseButton(1);
-#endif
-    }
-
-    bool RotLeftHeld()
-    {
-#if USE_NEW_INPUT
-        var k = Keyboard.current;
-        return k != null && (k.qKey.isPressed || k.leftArrowKey.isPressed);
-#else
-        return Input.GetKey(KeyCode.Q) || Input.GetKey(KeyCode.LeftArrow);
-#endif
-    }
-
-    bool RotRightHeld()
-    {
-#if USE_NEW_INPUT
-        var k = Keyboard.current;
-        return k != null && (k.eKey.isPressed || k.rightArrowKey.isPressed);
-#else
-        return Input.GetKey(KeyCode.E) || Input.GetKey(KeyCode.RightArrow);
-#endif
-    }
-
-    bool Digit1Down()
-    {
-#if USE_NEW_INPUT
-        var k = Keyboard.current; return k != null && k.digit1Key.wasPressedThisFrame;
-#else
-        return Input.GetKeyDown(KeyCode.Alpha1);
-#endif
-    }
-
-    bool Digit2Down()
-    {
-#if USE_NEW_INPUT
-        var k = Keyboard.current; return k != null && k.digit2Key.wasPressedThisFrame;
-#else
-        return Input.GetKeyDown(KeyCode.Alpha2);
-#endif
-    }
-
-    bool Digit3Down()
-    {
-#if USE_NEW_INPUT
-        var k = Keyboard.current; return k != null && k.digit3Key.wasPressedThisFrame;
-#else
-        return Input.GetKeyDown(KeyCode.Alpha3);
-#endif
-    }
-
-    bool TabDown()
-    {
-#if USE_NEW_INPUT
-        var k = Keyboard.current; return k != null && k.tabKey.wasPressedThisFrame;
-#else
-        return Input.GetKeyDown(KeyCode.Tab);
-#endif
-    }
-
-    float TwoFingerAvgDeltaX()
-    {
-#if USE_NEW_INPUT
-        var ts = Touchscreen.current;
-        if (ts == null) return 0f;
-        int n = 0; float sum = 0f;
-        foreach (var t in ts.touches)
-        {
-            if (t.isInProgress) { sum += t.delta.ReadValue().x; n++; }
-        }
-        return n == 2 ? sum * 0.5f : 0f;
-#else
-        if (Input.touchCount == 2)
-            return (Input.GetTouch(0).deltaPosition.x + Input.GetTouch(1).deltaPosition.x) * 0.5f;
-        return 0f;
-#endif
     }
 }
