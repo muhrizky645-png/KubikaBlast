@@ -1,4 +1,6 @@
-// BAGIAN 2 dari 2 (pembangun UI). Logika/state ada di KubikaMenu.cs.
+// BAGIAN 2 dari 3 (pembangun UI umum).
+// Logika/state -> KubikaMenu.cs
+// Tema visual (background terang + layar GAME OVER) -> KubikaMenuTheme.cs
 
 using System.Collections.Generic;
 using UnityEngine;
@@ -54,68 +56,6 @@ public partial class KubikaMenu
         scaler.matchWidthOrHeight = 0.5f;
     }
 
-    void BuildBackground()
-    {
-        var go = new GameObject("AnimatedBg", typeof(RectTransform));
-        go.transform.SetParent(_canvas.transform, false);
-        _bgRoot = go;
-        var rt = go.GetComponent<RectTransform>();
-        Stretch(rt);
-
-        var baseImg = MakeImage("BgBase", go.transform, Color.white);
-        baseImg.sprite = GradientSprite(new Color(0.07f, 0.08f, 0.16f), new Color(0.13f, 0.09f, 0.22f));
-        baseImg.type = Image.Type.Simple;
-        Stretch(baseImg.rectTransform);
-
-        int n = 16;
-        _bgBlocks = new RectTransform[n];
-        _bgSpeed = new float[n];
-        _bgRot = new float[n];
-        _bgSwayFreq = new float[n];
-        _bgPhase = new float[n];
-        _bgBaseX = new float[n];
-        _bgAmp = new float[n];
-
-        for (int i = 0; i < n; i++)
-        {
-            var img = MakeSprite("bgb" + i, go.transform, PaletteA(Random.Range(0, Palette.Length), Random.Range(0.28f, 0.5f)));
-            var b = img.rectTransform;
-            b.anchorMin = b.anchorMax = b.pivot = new Vector2(0.5f, 0.5f);
-            float size = Random.Range(90f, 230f);
-            b.sizeDelta = new Vector2(size, size);
-            float x = Random.Range(-620f, 620f);
-            float y = Random.Range(-1350f, 1350f);
-            b.anchoredPosition = new Vector2(x, y);
-            b.localRotation = Quaternion.Euler(0f, 0f, Random.Range(0f, 360f));
-
-            _bgBlocks[i] = b;
-            _bgBaseX[i] = x;
-            _bgSpeed[i] = Random.Range(55f, 150f);
-            _bgRot[i] = Random.Range(-22f, 22f);
-            _bgSwayFreq[i] = Random.Range(0.3f, 0.9f);
-            _bgPhase[i] = Random.Range(0f, 6.28f);
-            _bgAmp[i] = Random.Range(30f, 90f);
-        }
-    }
-
-    void AnimateBackground()
-    {
-        if (_bgRoot == null || !_bgRoot.activeSelf || _bgBlocks == null) return;
-        float dt = Time.unscaledDeltaTime;
-        _bgTime += dt;
-        for (int i = 0; i < _bgBlocks.Length; i++)
-        {
-            var b = _bgBlocks[i];
-            if (b == null) continue;
-            var p = b.anchoredPosition;
-            p.y += _bgSpeed[i] * dt;
-            if (p.y > 1380f) { p.y = -1380f; _bgBaseX[i] = Random.Range(-620f, 620f); }
-            p.x = _bgBaseX[i] + Mathf.Sin(_bgTime * _bgSwayFreq[i] + _bgPhase[i]) * _bgAmp[i];
-            b.anchoredPosition = p;
-            b.Rotate(0f, 0f, _bgRot[i] * dt);
-        }
-    }
-
     // Denyut tombol PLAY dibuat jauh lebih halus supaya tidak terlihat berkilau.
     void AnimatePlay()
     {
@@ -148,7 +88,7 @@ public partial class KubikaMenu
         var cardHalo = MakeGlow(root, new Color(1f, 0.84f, 0.31f, 0.13f));
         Place(cardHalo.rectTransform, C, new Vector2(0, 140), new Vector2(1040, 920));
 
-        var card = MakeCard(root, new Vector2(0, 140), new Vector2(820, 700), new Color(0.10f, 0.12f, 0.20f, 0.90f));
+        var card = MakeCard(root, new Vector2(0, 140), new Vector2(820, 700), CARD_DEEP);
 
         // Mahkota di puncak kartu (menyembul sedikit di atas tepi kartu).
         var crown = CrownSprite();
@@ -250,7 +190,7 @@ public partial class KubikaMenu
         _pausePanel = MakePanel("PausePanel", new Color(0f, 0f, 0f, 0.72f));
         var root = _pausePanel.transform;
 
-        var card = MakeCard(root, new Vector2(0, 40), new Vector2(760, 840), new Color(0.11f, 0.12f, 0.22f, 0.96f));
+        var card = MakeCard(root, new Vector2(0, 40), new Vector2(760, 840), CARD_DEEP);
         MakeDecoRow(card, new Vector2(0, 300));
         var title = MakeText("Title", card, 100, TextAnchor.MiddleCenter, FontStyle.Bold, Color.white);
         title.text = "PAUSED";
@@ -267,7 +207,7 @@ public partial class KubikaMenu
         _settingsPanel = MakePanel("SettingsPanel", new Color(0f, 0f, 0f, 0f));
         var root = _settingsPanel.transform;
 
-        var card = MakeCard(root, new Vector2(0, 40), new Vector2(920, 1560), new Color(0.10f, 0.12f, 0.20f, 0.94f));
+        var card = MakeCard(root, new Vector2(0, 40), new Vector2(920, 1560), CARD_DEEP);
         MakeDecoRow(card, new Vector2(0, 640));
         var title = MakeText("Title", card, 84, TextAnchor.MiddleCenter, FontStyle.Bold, Color.white);
         title.text = "SETTINGS";
@@ -311,61 +251,6 @@ public partial class KubikaMenu
         fill.sizeDelta = new Vector2(_sliderWidth * 0.5f, 0f);
     }
 
-    // ---- GAME OVER ----
-    void BuildGameOver()
-    {
-        _goPanel = MakePanel("GameOverPanel", new Color(0f, 0f, 0f, 0f));
-        var root = _goPanel.transform;
-
-        var card = MakeCard(root, new Vector2(0, 40), new Vector2(900, 1480), new Color(0.12f, 0.10f, 0.22f, 0.95f));
-        MakeDecoRow(card, new Vector2(0, 660));
-
-        _goTitle = MakeText("GO", card, 108, TextAnchor.MiddleCenter, FontStyle.Bold, new Color(1f, 0.36f, 0.48f));
-        _goTitle.text = "GAME OVER";
-        Place(_goTitle.rectTransform, C, new Vector2(0, 520), new Vector2(840, 170));
-        _goTitleRT = _goTitle.rectTransform;
-        _cgTitle = _goTitle.gameObject.AddComponent<CanvasGroup>();
-
-        _goMotivation = MakeText("Motivation", card, 42, TextAnchor.MiddleCenter, FontStyle.Normal, new Color(0.86f, 0.90f, 1f));
-        _goMotivation.horizontalOverflow = HorizontalWrapMode.Wrap;
-        _goMotivation.text = "";
-        Place(_goMotivation.rectTransform, C, new Vector2(0, 370), new Vector2(780, 130));
-        _cgMotivation = _goMotivation.gameObject.AddComponent<CanvasGroup>();
-
-        var scoreWrap = MakeText("ScoreWrap", card, 44, TextAnchor.MiddleCenter, FontStyle.Bold, new Color(0.75f, 0.8f, 0.9f));
-        scoreWrap.text = "FINAL SCORE";
-        Place(scoreWrap.rectTransform, C, new Vector2(0, 240), new Vector2(700, 70));
-        _cgScore = scoreWrap.gameObject.AddComponent<CanvasGroup>();
-
-        _goScore = MakeText("Score", scoreWrap.transform, 132, TextAnchor.MiddleCenter, FontStyle.Bold, new Color(1f, 0.84f, 0.31f));
-        _goScore.text = "0";
-        Place(_goScore.rectTransform, C, new Vector2(0, -110), new Vector2(760, 170));
-        _goScoreRT = _goScore.rectTransform;
-
-        _goRecord = MakeText("Record", card, 76, TextAnchor.MiddleCenter, FontStyle.Bold, new Color(1f, 0.84f, 0.31f));
-        _goRecord.text = "";
-        Place(_goRecord.rectTransform, C, new Vector2(0, -20), new Vector2(800, 110));
-        _goRecordRT = _goRecord.rectTransform;
-        _cgRecord = _goRecord.gameObject.AddComponent<CanvasGroup>();
-
-        _goBest = _goRecord;
-
-        _goStats = MakeText("Stats", card, 40, TextAnchor.UpperCenter, FontStyle.Bold, new Color(0.80f, 0.85f, 0.95f));
-        _goStats.text = "";
-        Place(_goStats.rectTransform, C, new Vector2(0, -190), new Vector2(760, 240));
-        _cgStats = _goStats.gameObject.AddComponent<CanvasGroup>();
-
-        var btnWrap = new GameObject("Buttons", typeof(RectTransform));
-        btnWrap.transform.SetParent(card, false);
-        _goButtonsRoot = btnWrap.GetComponent<RectTransform>();
-        Place(_goButtonsRoot, C, new Vector2(0, -480), new Vector2(860, 400));
-        _cgButtons = btnWrap.AddComponent<CanvasGroup>();
-
-        _goRestart = MakeButton(btnWrap.transform, "PLAY AGAIN", new Vector2(0, 80), new Vector2(600, 170), BTN_GREEN, 76);
-        // MAIN MENU dibuat sama dengan yang di layar PAUSED supaya konsisten.
-        _goHome = MakeButton(btnWrap.transform, "MAIN MENU", new Vector2(0, -110), new Vector2(600, 140), BTN_SLATE, 56);
-    }
-
     void BuildPauseButton()
     {
         var img = MakeSprite("PauseBtn", _canvas.transform, new Color(0f, 0f, 0f, 0.4f));
@@ -393,24 +278,6 @@ public partial class KubikaMenu
     }
 
     // ===================== HELPER UI =====================
-    Color PaletteA(int i, float a)
-    {
-        var c = Palette[((i % Palette.Length) + Palette.Length) % Palette.Length];
-        c.a = a;
-        return c;
-    }
-
-    void MakeDecoRow(Transform parent, Vector2 pos)
-    {
-        const int n = 5;
-        const float step = 120f;
-        for (int i = 0; i < n; i++)
-        {
-            var b = MakeSprite("deco" + i, parent, PaletteA(i, 0.92f));
-            Place(b.rectTransform, C, new Vector2(pos.x + (i - (n - 1) / 2f) * step, pos.y), new Vector2(76, 76));
-        }
-    }
-
     RectTransform MakeCard(Transform parent, Vector2 pos, Vector2 size, Color col)
     {
         var img = MakeSprite("Card", parent, col);
@@ -576,23 +443,6 @@ public partial class KubikaMenu
         _round = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 100f, 0,
             SpriteMeshType.FullRect, new Vector4(b, b, b, b));
         return _round;
-    }
-
-    Sprite GradientSprite(Color top, Color bottom)
-    {
-        if (_gradient != null) return _gradient;
-        int h = 64;
-        var tex = new Texture2D(1, h, TextureFormat.RGBA32, false);
-        tex.wrapMode = TextureWrapMode.Clamp;
-        tex.filterMode = FilterMode.Bilinear;
-        for (int y = 0; y < h; y++)
-        {
-            float f = (float)y / (h - 1);
-            tex.SetPixel(0, y, Color.Lerp(bottom, top, f));
-        }
-        tex.Apply();
-        _gradient = Sprite.Create(tex, new Rect(0, 0, 1, h), new Vector2(0.5f, 0.5f), 100f);
-        return _gradient;
     }
 
     static float RoundedAlpha(int x, int y, int w, int h, float radius)
