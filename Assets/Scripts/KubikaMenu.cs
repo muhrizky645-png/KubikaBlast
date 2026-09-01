@@ -3,7 +3,9 @@
 #define USE_NEW_INPUT
 #endif
 
-// BAGIAN 1 dari 2 (logika/state). Pembangun UI ada di KubikaMenuUI.cs.
+// BAGIAN 1 dari 3 (logika/state).
+// Pembangun UI umum -> KubikaMenuUI.cs
+// Tema visual (background terang + layar GAME OVER) -> KubikaMenuTheme.cs
 // Dipecah jadi partial class supaya tiap file tetap kecil dan aman di-push.
 
 using System.Collections;
@@ -102,7 +104,7 @@ public partial class KubikaMenu : MonoBehaviour
     RectTransform _playHalo;
     Image _playHaloImg;
 
-    Text _goTitle, _goMotivation, _goRecord, _goStats;
+    Text _goTitle, _goMotivation, _goRecord;
     RectTransform _goTitleRT, _goScoreRT, _goRecordRT;
     CanvasGroup _cgTitle, _cgMotivation, _cgScore, _cgRecord, _cgStats, _cgButtons;
     RectTransform _goButtonsRoot;
@@ -249,17 +251,11 @@ public partial class KubikaMenu : MonoBehaviour
         bool isRecord = score > 0 && score > bestBefore;
 
         if (_goScore != null) _goScore.text = "0";
-        if (_goBest != null) _goBest.text = "Best  " + best;
 
-        if (_goStats != null)
-        {
-            var sb = new StringBuilder();
-            sb.Append("Lines cleared").Append("        ").Append(core.LinesCleared).Append('\n');
-            sb.Append("Gems earned").Append("         ").Append(core.GemsEarned).Append('\n');
-            sb.Append("Best combo").Append("           x").Append(Mathf.Max(1, core.BestCombo)).Append('\n');
-            sb.Append("Pieces placed").Append("       ").Append(core.PiecesPlaced);
-            _goStats.text = sb.ToString();
-        }
+        // Statistik diisi ke baris label/nilai yang sesungguhnya (lihat KubikaMenuTheme).
+        // Cara lama menyejajarkan kolom pakai spasi manual di dalam satu Text, dan itu
+        // tidak pernah lurus karena font UI-nya proporsional.
+        SetGameOverStats(core);
 
         if (_goMotivation != null)
             _goMotivation.text = PickMotivation(core, bestBefore, isRecord);
