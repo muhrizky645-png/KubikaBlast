@@ -741,20 +741,22 @@ public class KubikaItems : MonoBehaviour
             Place(rt, new Vector2(0.5f, 0f), new Vector2(xs[i], 400f), new Vector2(210, 150));
             _itemBtn[i] = rt;
 
-            var lbl = MakeText("lbl" + i, rt, 46, TextAnchor.MiddleCenter, FontStyle.Bold, Color.white);
-            lbl.text = NAME[i];
-            Place(lbl.rectTransform, C, new Vector2(0, 10), new Vector2(210, 90));
-
             var itSp = (i == 0) ? _spHammer : (i == 1) ? _spBomb : _spUndo;
             if (itSp != null)
             {
+                // Item cukup lewat ikon saja - TANPA tulisan nama.
                 var icon = MakeImage("icon" + i, rt, Color.white);
                 icon.sprite = itSp;
                 icon.preserveAspect = true;
-                Place(icon.rectTransform, C, new Vector2(0, 26), new Vector2(120, 120));
-                lbl.fontSize = 30;
-                Place(lbl.rectTransform, C, new Vector2(0, -52), new Vector2(210, 50));
+                Place(icon.rectTransform, C, new Vector2(0, 4), new Vector2(132, 132));
                 btn.color = new Color(ICOL[i].r, ICOL[i].g, ICOL[i].b, 0.30f);
+            }
+            else
+            {
+                // Fallback: kalau ikon belum ada, baru tampilkan nama supaya tombol tak kosong.
+                var lbl = MakeText("lbl" + i, rt, 44, TextAnchor.MiddleCenter, FontStyle.Bold, Color.white);
+                lbl.text = NAME[i];
+                Place(lbl.rectTransform, C, new Vector2(0, 10), new Vector2(210, 90));
             }
 
             var badge = MakeSprite("badge" + i, rt, new Color(0f, 0f, 0f, 0.55f));
@@ -1482,99 +1484,4 @@ public class KubikaItems : MonoBehaviour
             float k = t / dur;
             rt.localScale = Vector3.one * Mathf.Lerp(0.4f, 2.2f, k);
             var c = img.color; c.a = Mathf.Lerp(0.75f, 0f, k); img.color = c;
-            yield return null;
-        }
-        Destroy(img.gameObject);
-    }
-
-    IEnumerator GemRing(Vector2 center, int combo)
-    {
-        Color col = (combo >= 7) ? new Color(1f, 0.55f, 0.80f, 0.60f)
-                  : (combo >= 5) ? new Color(1f, 0.72f, 0.35f, 0.60f)
-                                 : new Color(0.80f, 0.90f, 1f, 0.55f);
-
-        var img = MakeImage("gemRing", _play.transform, col);
-        img.sprite = RoundSprite();
-        var rt = img.rectTransform;
-        rt.anchorMin = rt.anchorMax = rt.pivot = C;
-        rt.anchoredPosition = center;
-        rt.sizeDelta = new Vector2(120, 120);
-
-        float baseA = col.a;
-        float t = 0f, dur = 0.34f;
-        while (t < dur)
-        {
-            t += Time.unscaledDeltaTime;
-            float k = t / dur;
-            rt.localScale = Vector3.one * Mathf.Lerp(0.4f, 3.4f, k);
-            var c = col; c.a = Mathf.Lerp(baseA, 0f, k); img.color = c;
-            yield return null;
-        }
-        Destroy(img.gameObject);
-    }
-
-    IEnumerator GemGainPopup(int amount, Vector2 at)
-    {
-        var txt = MakeText("gemGain", _play.transform, 56, TextAnchor.MiddleCenter, FontStyle.Bold,
-            new Color(0.72f, 0.95f, 1f));
-        txt.text = "+" + amount;
-        Place(txt.rectTransform, C, at, new Vector2(320f, 90f));
-        var rt = txt.rectTransform;
-
-        Vector2 from = at, to = at + new Vector2(0f, 130f);
-        float t = 0f, dur = 0.8f;
-        while (t < dur)
-        {
-            t += Time.unscaledDeltaTime;
-            float k = Mathf.Clamp01(t / dur);
-            rt.anchoredPosition = Vector2.Lerp(from, to, k * k * (3f - 2f * k));
-            rt.localScale = Vector3.one * Mathf.Lerp(0.6f, 1.15f, Mathf.Min(1f, k * 4f));
-            var c = txt.color;
-            c.a = 1f - Mathf.Clamp01((k - 0.55f) / 0.45f);
-            txt.color = c;
-            yield return null;
-        }
-        Destroy(txt.gameObject);
-    }
-
-    IEnumerator PunchLabel(RectTransform rt)
-    {
-        if (rt == null) yield break;
-        float t = 0f, dur = 0.18f;
-        while (t < dur)
-        {
-            t += Time.unscaledDeltaTime;
-            float s = 1f + 0.35f * Mathf.Sin((t / dur) * Mathf.PI);
-            rt.localScale = new Vector3(s, s, 1f);
-            yield return null;
-        }
-        rt.localScale = Vector3.one;
-    }
-
-    // ---- Pointer abstraksi ----
-    Vector2 PPos()
-    {
-#if USE_NEW_INPUT
-        var m = Mouse.current;
-        if (m != null) return m.position.ReadValue();
-        var ts = Touchscreen.current;
-        if (ts != null && ts.primaryTouch != null) return ts.primaryTouch.position.ReadValue();
-        return Vector2.zero;
-#else
-        return Input.mousePosition;
-#endif
-    }
-
-    bool PDown()
-    {
-#if USE_NEW_INPUT
-        var m = Mouse.current;
-        if (m != null && m.leftButton.wasPressedThisFrame) return true;
-        var ts = Touchscreen.current;
-        if (ts != null && ts.primaryTouch != null && ts.primaryTouch.press.wasPressedThisFrame) return true;
-        return false;
-#else
-        return Input.GetMouseButtonDown(0);
-#endif
-    }
-}
+            yield return
