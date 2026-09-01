@@ -30,6 +30,12 @@ using KubikaBlast;
 ///   terbaik -> statistik ronde -> tombol. Ronde yang berakhir cepat pun tetap
 ///   punya sesuatu untuk ditunjukkan.
 ///
+/// GAYA VISUAL (port dari Tetris3D, versi Canvas/uGUI):
+///   - Tombol 3D glossy: bayangan + sisi bawah gelap (kesan tebal) + muka + kilau.
+///   - Kartu skor Home: mahkota di puncak + halo emas lembut di belakang.
+///   - Daftar TOP 5: tiap peringkat jadi baris berwarna medali (emas/perak/perunggu).
+///   - Tombol PLAY: berdenyut halus + halo hijau yang membesar-mengecil.
+///
 /// Semua tap dideteksi manual (tanpa EventSystem). Saat menu/jeda terbuka:
 /// Time.timeScale = 0 dan BlastInput dimatikan. Animasi background pakai
 /// unscaledDeltaTime agar tetap bergerak walau game di-pause.
@@ -112,7 +118,7 @@ public class KubikaMenu : MonoBehaviour
 
     Canvas _canvas;
     Font _font;
-    Sprite _round, _gradient;
+    Sprite _round, _gradient, _crown, _glow;
 
     GameObject _homePanel, _pausePanel, _settingsPanel, _goPanel;
     RectTransform _pauseBtn;
@@ -121,7 +127,13 @@ public class KubikaMenu : MonoBehaviour
     RectTransform _btnBackSettings;
     RectTransform _goRestart, _goHome;
     RectTransform _musicBar, _sfxBar, _fpsBar, _musicFill, _sfxFill, _fpsFill;
-    Text _musicPct, _sfxPct, _fpsPct, _homeTop5, _goScore, _goBest;
+    Text _musicPct, _sfxPct, _fpsPct, _goScore, _goBest;
+
+    // TOP 5 sekarang dibangun sebagai baris berwarna medali (lihat RefreshHome).
+    RectTransform _top5Root;
+    // Halo hijau berdenyut di belakang tombol PLAY.
+    RectTransform _playHalo;
+    Image _playHaloImg;
 
     // Game over: elemen baru + grup untuk fade bertahap.
     Text _goTitle, _goMotivation, _goRecord, _goStats;
@@ -162,7 +174,7 @@ public class KubikaMenu : MonoBehaviour
         var core = _game != null ? _game.Core : null;
 
         // Jaring pengaman: saat status BERMAIN, pastikan waktu berjalan & input game
-        // aktif, supaya game tidak pernah "stuck tak bisa dipencet".
+        // aktif, supaya game tidak pernah \"stuck tak bisa dipencet\".
         //
         // DULU baris ini menyetel Time.timeScale = 1 SETIAP FRAME tanpa syarat, jadi
         // hit-stop (jeda dramatis 60-80 ms saat clear besar) selalu dibatalkan dalam
@@ -193,7 +205,7 @@ public class KubikaMenu : MonoBehaviour
         {
             if (core.GameOver && !_prevGameOver && _screen == UIScreen.Playing)
             {
-                // Ambil rekor SEBELUM skor ini dicatat, supaya "NEW RECORD" akurat.
+                // Ambil rekor SEBELUM skor ini dicatat, supaya \"NEW RECORD\" akurat.
                 var before = LoadScores();
                 int bestBefore = (before.Count > 0) ? before[0] : 0;
                 RecordScore(core.Score);
@@ -203,6 +215,7 @@ public class KubikaMenu : MonoBehaviour
         }
 
         AnimateBackground();
+        AnimatePlay();
         UpdateSliderFills();
         if (_screen == UIScreen.Settings) HandleSliders();
 
@@ -427,7 +440,7 @@ public class KubikaMenu : MonoBehaviour
             if (cg != null) cg.alpha = Mathf.Clamp01(k * 2.2f);
             if (rt != null)
             {
-                // overshoot kecil supaya terasa "hidup"
+                // overshoot kecil supaya terasa \"hidup\"
                 float s = k < 0.65f ? Mathf.Lerp(from, to * 1.12f, k / 0.65f)
                                     : Mathf.Lerp(to * 1.12f, to, (k - 0.65f) / 0.35f);
                 rt.localScale = Vector3.one * s;
@@ -571,17 +584,47 @@ public class KubikaMenu : MonoBehaviour
 
     void RefreshHome()
     {
-        if (_homeTop5 == null) return;
+        if (_top5Root == null) return;
+
+        // Bersihkan baris lama sebelum membangun ulang.
+        for (int i = _top5Root.childCount - 1; i >= 0; i--)
+            Destroy(_top5Root.GetChild(i).gameObject);
+
         var list = LoadScores();
-        if (list.Count == 0) { _homeTop5.text = "No scores yet.\nPlay your first round!"; return; }
+        if (list.Count == 0)
+        {
+            var empty = MakeText("EmptyMsg", _top5Root, 48, TextAnchor.MiddleCenter, FontStyle.Bold, new Color(0.80f, 0.85f, 0.95f));
+            empty.text = "No scores yet.\nPlay your first round!";
+            Place(empty.rectTransform, C, Vector2.zero, new Vector2(700, 220));
+            return;
+        }
+
+        // Warna medali untuk 3 besar.
+        Color gold = new Color(1f, 0.84f, 0.31f);
+        Color silver = new Color(0.82f, 0.85f, 0.90f);
+        Color bronze = new Color(0.88f, 0.58f, 0.36f);
+
         int n = Mathf.Min(5, list.Count);
-        var sb = new StringBuilder();
+        float rowH = 80f, gap = 12f;
+        float totalH = n * rowH + (n - 1) * gap;
+        float startY = totalH * 0.5f - rowH * 0.5f;
+
         for (int i = 0; i < n; i++)
         {
-            sb.Append(i + 1).Append(".   ").Append(list[i]);
-            if (i < n - 1) sb.Append('\n');
+            Color medal = (i == 0) ? gold : (i == 1) ? silver : (i == 2) ? bronze : new Color(0.45f, 0.50f, 0.62f);
+            float y = startY - i * (rowH + gap);
+
+            var row = MakeSprite("row" + i, _top5Root, new Color(medal.r, medal.g, medal.b, i < 3 ? 0.26f : 0.14f));
+            Place(row.rectTransform, C, new Vector2(0, y), new Vector2(700, rowH));
+
+            var rank = MakeText("rank" + i, row.transform, 48, TextAnchor.MiddleLeft, FontStyle.Bold, i < 3 ? medal : Color.white);
+            rank.text = "#" + (i + 1);
+            Place(rank.rectTransform, C, new Vector2(-280, 0), new Vector2(180, rowH));
+
+            var sc = MakeText("sc" + i, row.transform, 52, TextAnchor.MiddleRight, FontStyle.Bold, Color.white);
+            sc.text = list[i].ToString();
+            Place(sc.rectTransform, C, new Vector2(290, 0), new Vector2(360, rowH));
         }
-        _homeTop5.text = sb.ToString();
     }
 
     // ===================== BUILD UI =====================
@@ -685,6 +728,23 @@ public class KubikaMenu : MonoBehaviour
         }
     }
 
+    // Denyut halus tombol PLAY + halo hijau (hanya di layar Home).
+    void AnimatePlay()
+    {
+        if (_screen != UIScreen.Home || _btnMain == null) return;
+        float t = Time.unscaledTime;
+        float wave = Mathf.Sin(t * 3.2f);
+        _btnMain.localScale = Vector3.one * (1f + wave * 0.035f);
+        if (_playHalo != null)
+            _playHalo.localScale = Vector3.one * (1f + wave * 0.10f);
+        if (_playHaloImg != null)
+        {
+            var c = _playHaloImg.color;
+            c.a = 0.16f + (wave * 0.5f + 0.5f) * 0.22f;
+            _playHaloImg.color = c;
+        }
+    }
+
     // ---- HOME ----
     void BuildHome()
     {
@@ -696,12 +756,37 @@ public class KubikaMenu : MonoBehaviour
         Place(title.rectTransform, C, new Vector2(0, 780), new Vector2(1000, 360));
         MakeDecoRow(root, new Vector2(0, 560));
 
+        // Halo emas lembut di belakang kartu skor (kesan panel gagah ala Tetris3D).
+        var cardHalo = MakeGlow(root, new Color(1f, 0.84f, 0.31f, 0.22f));
+        Place(cardHalo.rectTransform, C, new Vector2(0, 150), new Vector2(1040, 900));
+
         var card = MakeCard(root, new Vector2(0, 150), new Vector2(800, 660), new Color(0.10f, 0.12f, 0.20f, 0.90f));
+
+        // Mahkota di puncak kartu (jika ikon tersedia di Resources/KubikaIcons).
+        var crown = CrownSprite();
+        if (crown != null)
+        {
+            var cimg = MakeImage("Crown", card, Color.white);
+            cimg.sprite = crown;
+            cimg.type = Image.Type.Simple;
+            cimg.preserveAspect = true;
+            Place(cimg.rectTransform, C, new Vector2(0, 330), new Vector2(140, 140));
+        }
+
         var top5Title = MakeText("Top5Title", card, 62, TextAnchor.MiddleCenter, FontStyle.Bold, new Color(1f, 0.84f, 0.31f));
         top5Title.text = "TOP 5";
-        Place(top5Title.rectTransform, C, new Vector2(0, 250), new Vector2(700, 90));
-        _homeTop5 = MakeText("Top5List", card, 58, TextAnchor.UpperCenter, FontStyle.Bold, Color.white);
-        Place(_homeTop5.rectTransform, C, new Vector2(0, 150), new Vector2(700, 420));
+        Place(top5Title.rectTransform, C, new Vector2(0, 235), new Vector2(700, 90));
+
+        // Wadah baris peringkat (diisi ulang tiap kali Home dibuka, lihat RefreshHome).
+        var listGO = new GameObject("Top5Root", typeof(RectTransform));
+        listGO.transform.SetParent(card, false);
+        _top5Root = listGO.GetComponent<RectTransform>();
+        Place(_top5Root, C, new Vector2(0, 110), new Vector2(720, 460));
+
+        // Halo hijau berdenyut di belakang tombol PLAY.
+        _playHaloImg = MakeGlow(root, new Color(0.30f, 0.85f, 0.45f, 0f));
+        _playHalo = _playHaloImg.rectTransform;
+        Place(_playHalo, C, new Vector2(0, -560), new Vector2(940, 420));
 
         _btnMain = MakeButton(root, "PLAY", new Vector2(0, -560), new Vector2(620, 180),
             new Color(0.30f, 0.75f, 0.40f), 84);
@@ -898,14 +983,85 @@ public class KubikaMenu : MonoBehaviour
         rt.offsetMin = Vector2.zero; rt.offsetMax = Vector2.zero;
     }
 
+    // Tombol 3D glossy: bayangan + sisi bawah gelap (tebal) + muka + kilau.
+    // Container yang dikembalikan = area klik (dipakai Hit()).
     RectTransform MakeButton(Transform parent, string label, Vector2 pos, Vector2 size, Color bg, int fontSize)
     {
-        var img = MakeSprite(label + "Btn", parent, bg);
-        Place(img.rectTransform, C, pos, size);
-        var t = MakeText(label + "Txt", img.transform, fontSize, TextAnchor.MiddleCenter, FontStyle.Bold, Color.white);
+        var containerGO = new GameObject(label + "Btn", typeof(RectTransform));
+        containerGO.transform.SetParent(parent, false);
+        var container = containerGO.GetComponent<RectTransform>();
+        Place(container, C, pos, size);
+
+        float depth = Mathf.Clamp(size.y * 0.16f, 10f, 26f);
+
+        // 1) Bayangan jatuh di bawah tombol.
+        var shadow = MakeSprite(label + "Sh", container, new Color(0f, 0f, 0f, 0.30f));
+        Place(shadow.rectTransform, C, new Vector2(0f, -depth * 0.9f), size);
+
+        // 2) Sisi bawah gelap -> kesan tebal 3D.
+        var baseImg = MakeSprite(label + "Base", container, Darken(bg, 0.55f));
+        Place(baseImg.rectTransform, C, new Vector2(0f, -depth), size);
+
+        // 3) Muka tombol.
+        var face = MakeSprite(label + "Face", container, bg);
+        Place(face.rectTransform, C, Vector2.zero, size);
+
+        // 4) Kilau (highlight) di paruh atas muka.
+        var gloss = MakeSprite(label + "Gloss", face.transform, new Color(1f, 1f, 1f, 0.16f));
+        Place(gloss.rectTransform, C, new Vector2(0f, size.y * 0.22f), new Vector2(size.x * 0.86f, size.y * 0.40f));
+
+        // 5) Teks di atas muka.
+        var t = MakeText(label + "Txt", face.transform, fontSize, TextAnchor.MiddleCenter, FontStyle.Bold, Color.white);
         t.text = label;
         Place(t.rectTransform, C, Vector2.zero, size);
-        return img.rectTransform;
+
+        return container;
+    }
+
+    static Color Darken(Color c, float f) => new Color(c.r * f, c.g * f, c.b * f, c.a);
+
+    // Halo cahaya lembut (radial). Dipakai untuk kartu skor & tombol PLAY.
+    Image MakeGlow(Transform parent, Color col)
+    {
+        var img = MakeImage("Glow", parent, col);
+        img.sprite = GlowSprite();
+        img.type = Image.Type.Simple;
+        img.raycastTarget = false;
+        return img;
+    }
+
+    Sprite GlowSprite()
+    {
+        if (_glow != null) return _glow;
+        int size = 64;
+        var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        tex.wrapMode = TextureWrapMode.Clamp;
+        tex.filterMode = FilterMode.Bilinear;
+        var px = new Color32[size * size];
+        Vector2 ctr = new Vector2(size * 0.5f, size * 0.5f);
+        float maxd = size * 0.5f;
+        for (int y = 0; y < size; y++)
+            for (int x = 0; x < size; x++)
+            {
+                float d = Vector2.Distance(new Vector2(x + 0.5f, y + 0.5f), ctr) / maxd;
+                float a = Mathf.Clamp01(1f - d);
+                a = a * a; // falloff lebih lembut
+                px[y * size + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(a * 255f));
+            }
+        tex.SetPixels32(px);
+        tex.Apply();
+        _glow = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 100f);
+        return _glow;
+    }
+
+    // Ikon mahkota dari Resources/KubikaIcons/Crown_A (null-safe kalau tak ada).
+    Sprite CrownSprite()
+    {
+        if (_crown != null) return _crown;
+        var tex = Resources.Load<Texture2D>("KubikaIcons/Crown_A");
+        if (tex != null)
+            _crown = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
+        return _crown;
     }
 
     Text MakeText(string name, Transform parent, int size, TextAnchor anchor, FontStyle style, Color col)
