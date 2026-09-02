@@ -6,12 +6,12 @@ using KubikaBlast;
 /// <summary>
 /// TRANSISI PEMBUKA (penghias saat tombol MAIN ditekan).
 ///
-/// Blok bawaan (starting fill dari BlastGame.StartingFill) sebenarnya sudah ada
-/// sejak BlastGame.Start(), jauh sebelum pemain menekan MAIN. Script ini
-/// menyembunyikan SEMUANYA lebih dulu -- selagi masih tertutup background menu --
-/// lalu tiruan (copy) tiap blok terbang masuk dari segala arah SATU PER SATU dan
-/// terpasang tepat di posisi aslinya. Begitu satu tiruan mendarat, blok asli
-/// dinyalakan dan tiruannya dibuang.
+/// Blok bawaan (starting fill dari BlastGame.StartingFill, lalu ditimpa jadi susunan
+/// rapi oleh KubikaStartLayout) sebenarnya sudah ada sejak BlastGame.Start(), jauh
+/// sebelum pemain menekan MAIN. Script ini menyembunyikan SEMUANYA lebih dulu --
+/// selagi masih tertutup background menu -- lalu tiruan (copy) tiap blok terbang
+/// masuk dari segala arah SATU PER SATU dan terpasang tepat di posisi aslinya.
+/// Begitu satu tiruan mendarat, blok asli dinyalakan dan tiruannya dibuang.
 ///
 /// PENTING (bug versi pertama):
 ///   Dulu blok asli disembunyikan DI DALAM LaunchOne(), yang dipanggil bertahap.
@@ -19,6 +19,17 @@ using KubikaBlast;
 ///   tabung tampak sudah penuh lalu tiruan terbang masuk di atasnya. Sekarang
 ///   penyembunyian dilakukan SEKALIGUS lewat HideAllBlocks(), bahkan sebelum
 ///   pemain menekan MAIN, sehingga tabung benar-benar mulai KOSONG.
+///
+/// SUARA ("tuk") saat blok mendarat:
+///   Klip pop-nya dibuat SENDIRI di file ini, bukan di KubikaSfx.cs -- file itu
+///   sudah 25 KB (zona rawan push) dan tidak perlu disentuh sama sekali.
+///   Dua aturan yang kita patuhi dari pelajaran lama soal suara "nabrak":
+///     1. Variasi nada diambil dari KLIP BERBEDA, bukan dengan mengubah
+///        AudioSource.pitch. Mengubah pitch akan MENGGESER nada semua PlayOneShot
+///        yang masih berdering di source yang sama.
+///     2. Bunyinya ditipiskan (tiap blok ke-N + jeda minimal), karena ~30-60 blok
+///        mendarat dalam waktu di bawah satu detik dan akan jadi berondong.
+///   Volumenya ikut slider SFX pemain kalau KubikaSfx ada.
 ///
 /// KENAPA FILE TERPISAH:
 ///   BlastGame.cs sudah 33 KB (di atas batas aman push) dan blok aslinya sudah
@@ -37,7 +48,7 @@ public class KubikaIntro : MonoBehaviour
     /// <summary>True selagi transisi pembuka berjalan. Script lain boleh memeriksa ini.</summary>
     public static bool Active { get; private set; }
 
-    // ================= TOMBOL PENYETEL =================
+    // ================= TOMBOL PENYETEL (ANIMASI) =================
     // Total waktu keberangkatan semua blok. Naikkan kalau mau lebih dramatis.
     const float SPAWN_WINDOW = 0.95f;
     // Jeda antar keberangkatan dijepit di antara dua nilai ini, jadi papan penuh
@@ -57,6 +68,20 @@ public class KubikaIntro : MonoBehaviour
     // Batas aman: kalau animasi tersangkut, paksa selesai setelah sekian detik.
     const float WATCHDOG = 3f;
 
+    // ================= TOMBOL PENYETEL (SUARA) =================
+    // Jumlah variasi klip "tuk". Nada diambil dari klip berbeda, BUKAN dari pitch.
+    const int TUK_VARIANTS = 5;
+    // Bunyi tiap blok ke-N yang mendarat. 1 = semua blok (berondong), 3 = lebih sopan.
+    const int SFX_EVERY = 2;
+    // Jeda minimal antar bunyi (detik). Penjaga kedua kalau blok mendarat berombongan.
+    const float SFX_MIN_GAP = 0.045f;
+    // Volume dasar pop mendarat (sebelum dikali slider SFX pemain).
+    const float SFX_VOLUME = 0.5f;
+    // Volume "tap" penutup saat papan selesai terpasang.
+    const float SFX_END_VOLUME = 0.8f;
+
+    const int SAMPLE_RATE = 44100;
+
     const string BLOCKS_ROOT = "Blocks";
     const string FLY_ROOT = "IntroFly";
 
@@ -71,12 +96,24 @@ public class KubikaIntro : MonoBehaviour
     bool _running;
     int _flying;
 
+    // ---- suara ----
+    AudioSource _audio;
+    AudioClip[] _tuk;
+    AudioClip _tukEnd;
+    int _landed;         // sudah berapa blok mendarat di ronde ini
+    float _lastTuk = -99f;
+
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void Bootstrap()
     {
         if (FindFirstObjectByType<KubikaIntro>() != null) return;
         var go = new GameObject("KubikaIntro (auto)");
         go.AddComponent<KubikaIntro>();
+    }
+
+    void Awake()
+    {
+        BuildAudio();
     }
 
     void OnDestroy()
@@ -183,6 +220,10 @@ public class KubikaIntro : MonoBehaviour
         Active = true;
         _flying = 0;
 
+        // Penghitung suara direset per ronde, bukan per aplikasi.
+        _landed = 0;
+        _lastTuk = -99f;
+
         bool restoreInput = _input != null && _input.enabled;
         if (_input != null) _input.enabled = false;
 
@@ -197,7 +238,8 @@ public class KubikaIntro : MonoBehaviour
                 var t = blocks.GetChild(i);
                 if (t == null) continue;
                 // Jaring pengaman: kalau ada yang lolos dari HideAllBlocks (misal
-                // papan baru dibangun di frame yang sama), matikan sekarang.
+                // papan baru dibangun di frame yang sama, atau KubikaStartLayout
+                // baru saja menggambar ulang papan), matikan sekarang.
                 if (t.gameObject.activeSelf) t.gameObject.SetActive(false);
                 targets.Add(t);
             }
@@ -225,6 +267,9 @@ public class KubikaIntro : MonoBehaviour
                 guard += Time.unscaledDeltaTime;
                 yield return null;
             }
+
+            // "Tap" penutup: papan selesai terpasang.
+            PlayEndTuk();
         }
         finally
         {
@@ -321,10 +366,12 @@ public class KubikaIntro : MonoBehaviour
         }
         finally
         {
-            // Tiruan dibuang, blok ASLI dinyalakan. Ini titik serah-terimanya.
+            // Tiruan dibuang, blok ASLI dinyalakan. Ini titik serah-terimanya --
+            // dan tepat di sini pula bunyi "tuk" mendarat dibunyikan.
             if (fly != null) Destroy(fly.gameObject);
             if (real != null) real.gameObject.SetActive(true);
             _flying--;
+            PlayLandTuk();
         }
     }
 
@@ -366,5 +413,102 @@ public class KubikaIntro : MonoBehaviour
             var t = blocks.GetChild(i);
             if (t != null && !t.gameObject.activeSelf) t.gameObject.SetActive(true);
         }
+    }
+
+    // ==================================================================
+    // ============ SUARA "TUK" (dibuat sendiri, procedural) ============
+    // ==================================================================
+
+    void BuildAudio()
+    {
+        _audio = gameObject.AddComponent<AudioSource>();
+        _audio.playOnAwake = false;
+        _audio.spatialBlend = 0f;   // 2D, tidak terpengaruh posisi kamera
+        _audio.volume = 1f;
+
+        // Variasi nada disiapkan sebagai KLIP TERPISAH. Ini sengaja: mengubah
+        // AudioSource.pitch akan menggeser nada semua bunyi yang MASIH berdering
+        // di source yang sama -- pelajaran mahal dari suara clear yang dulu sumbang.
+        _tuk = new AudioClip[Mathf.Max(1, TUK_VARIANTS)];
+        for (int i = 0; i < _tuk.Length; i++)
+        {
+            float k = (_tuk.Length <= 1) ? 0.5f : (float)i / (_tuk.Length - 1);
+            float mul = Mathf.Lerp(0.90f, 1.16f, k);
+            _tuk[i] = MakeTuk("sfx_intro_tuk_" + i, 640f * mul, 0.085f, 0.20f);
+        }
+
+        // Penutup: lebih rendah, lebih panjang, sedikit lebih "berisi" -- terasa
+        // seperti papan yang selesai dipasang, bukan satu blok lagi.
+        _tukEnd = MakeTuk("sfx_intro_tuk_end", 430f, 0.17f, 0.26f);
+    }
+
+    /// <summary>
+    /// Pop perkusif pendek: nada turun cepat + sedikit derik serangan.
+    /// freq  = nada awal (Hz), duration = panjang klip, noise = kadar derik.
+    /// </summary>
+    static AudioClip MakeTuk(string name, float freq, float duration, float noise)
+    {
+        int count = Mathf.Max(8, Mathf.CeilToInt(duration * SAMPLE_RATE));
+        var data = new float[count];
+        float half = Mathf.Max(0.001f, duration * 0.5f);
+
+        for (int i = 0; i < count; i++)
+        {
+            float t = (float)i / SAMPLE_RATE;
+
+            // Serangan sangat tajam lalu redam cepat -> terdengar "tuk",
+            // bukan "beep" yang berdenging.
+            float env = Mathf.Exp(-t * 46f) * (1f - Mathf.Exp(-t * 900f));
+
+            // Nada sengaja MELOROT: ciri khas benda padat yang beradu.
+            float f = Mathf.Lerp(freq, freq * 0.62f, Mathf.Clamp01(t / half));
+            float body = Mathf.Sin(2f * Mathf.PI * f * t) * 0.75f
+                       + Mathf.Sin(2f * Mathf.PI * f * 2f * t) * 0.14f;
+
+            // Derik pendek di awal supaya ada "tepi" yang terasa menempel.
+            float click = (Random.value * 2f - 1f) * Mathf.Exp(-t * 420f) * noise;
+
+            // Redam 3 ms terakhir supaya tidak ada letupan di ujung klip.
+            float tail = Mathf.Min(1f, (count - i) / (0.003f * SAMPLE_RATE));
+
+            data[i] = Mathf.Clamp((body + click) * env * tail, -1f, 1f);
+        }
+
+        var clip = AudioClip.Create(name, count, 1, SAMPLE_RATE, false);
+        clip.SetData(data, 0);
+        return clip;
+    }
+
+    /// <summary>
+    /// Bunyi satu blok mendarat. DITIPISKAN dua lapis: tiap blok ke-N, lalu jeda
+    /// minimal antar bunyi. Tanpa ini, ~30-60 blok dalam kurang dari satu detik
+    /// akan terdengar seperti berondongan senapan.
+    /// </summary>
+    void PlayLandTuk()
+    {
+        if (_audio == null || _tuk == null || _tuk.Length == 0) return;
+
+        _landed++;
+        int every = Mathf.Max(1, SFX_EVERY);
+        if (_landed % every != 0) return;
+
+        float now = Time.unscaledTime;
+        if (now - _lastTuk < SFX_MIN_GAP) return;
+        _lastTuk = now;
+
+        _audio.PlayOneShot(_tuk[Random.Range(0, _tuk.Length)], SFX_VOLUME * SfxLevel());
+    }
+
+    void PlayEndTuk()
+    {
+        if (_audio == null || _tukEnd == null) return;
+        _audio.PlayOneShot(_tukEnd, SFX_END_VOLUME * SfxLevel());
+    }
+
+    /// <summary>Ikut slider SFX pemain kalau KubikaSfx ada; kalau tidak, penuh.</summary>
+    static float SfxLevel()
+    {
+        var s = KubikaSfx.Instance;
+        return (s != null) ? Mathf.Clamp01(s.sfxVolume) : 1f;
     }
 }
