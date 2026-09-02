@@ -2,95 +2,89 @@ using UnityEngine;
 using KubikaBlast;
 
 /// <summary>
-/// SUSUNAN PAPAN AWAL (rintangan pembuka) gaya Block Blast.
+/// SUSUNAN PAPAN AWAL - MOZAIK BERATURAN YANG DIUNDI TIAP RONDE.
 ///
-/// SEJARAH SINGKAT (biar tidak berputar balik):
-///   Versi 1 - BlastGame.StartingFill() menabur acak murni. Terlihat seperti
-///             derau: tidak ada bentuk yang bisa dibaca mata, dan tidak ada
-///             jaminan pemain bisa menghancurkan apa pun di langkah awal.
-///   Versi 2 - diganti FONDASI CORONG yang rapi (baris penuh berlubang 1/2/4,
-///             satu warna per baris). Jaminannya dapat, tapi terlalu kaku:
-///             kelihatan jelas "disusun mesin", bukan papan permainan.
-///   Versi 3 (INI) - kembali ke TABURAN ACAK, tapi acak yang TERTATA, lalu
-///             papannya DICOCOKKAN ke potongan yang benar-benar ada di tray.
+/// SEJARAH SINGKAT (supaya tidak berputar balik lagi):
+///   V1 - StartingFill() bawaan: acak murni per sel. Terlihat seperti derau.
+///   V2 - Fondasi corong (baris penuh berlubang 1/2/4). Kaku, jelas "disusun mesin".
+///   V3 - Taburan organik (noise sinus, berat di dasar). SALAH ARAH: itu meniru
+///        endapan/gravitasi, padahal TABUNG INI TIDAK PUNYA ATAS DAN BAWAH -
+///        dia cuma papan datar yang digulung. Jadi siluet "berat di bawah" tidak
+///        punya arti apa-apa di sini. Dan yang diminta memang bukan acak organik.
+///   V4 (INI) - MOZAIK: motif geometris yang benar-benar beraturan, dipilih acak
+///        dari perpustakaan 7 motif tiap kali permainan dimulai.
 ///
-/// TIGA HAL YANG BIKIN TABURAN INI ENAK DILIHAT:
-///   1. GUMPALAN, BUKAN DERAU. Sel diisi lewat ambang kebisingan halus yang
-///      periodik mengelilingi tabung (jumlah beberapa gelombang sinus), bukan
-///      lewat undian per sel. Hasilnya massa yang menyambung dengan tepian
-///      bergelombang - mata membacanya sebagai bentuk, bukan bintik.
-///   2. BERAT DI BAWAH. Ambang kepadatan turun makin ke atas (BASE_DENSITY ->
-///      TOP_DENSITY), jadi terbentuk siluet seperti endapan: padat di dasar,
-///      makin renggang ke atas, dan puncak tabung tetap lapang buat bermain.
-///   3. WARNA BERBERCAK. Warna TIDAK diundi per sel (itu yang bikin papan lama
-///      terlihat seperti confetti). Warna diambil dari medan halus kedua, jadi
-///      sel bertetangga cenderung sewarna dan terbentuk bercak-bercak yang
-///      berpilin mengelilingi tabung. Ini penyumbang "indah" yang paling besar.
-///   Di atasnya ditambah sedikit ketidakteraturan yang disengaja: goyangan tepi,
-///   beberapa kantong kosong di dalam massa, dan beberapa butiran melayang di
-///   atasnya - supaya tetap terasa DITABUR, bukan digambar.
+/// PRINSIP DESAINNYA:
+///   1. TERATUR, BUKAN ACAK. Setiap sel ditentukan rumus periodik, bukan undian.
+///      Mata langsung membaca polanya - itu yang bikin terasa "indah", bukan
+///      ketidakteraturan.
+///   2. ACAKNYA DI TINGKAT GAYA, BUKAN DI TINGKAT SEL. Yang diundi tiap ronde:
+///      motif mana (7 pilihan), putaran mengelilingi tabung, arah miring, cermin,
+///      balik vertikal, fase gelombang, dan palet warnanya. Jadi tiap PLAY selalu
+///      beda, tapi selalu rapi.
+///   3. PAPAN DATAR, BUKAN TUMPUKAN. Mozaik ditaruh sebagai PITA yang melingkari
+///      tengah tabung (BAND_ROWS), dengan ruang kosong di atas DAN di bawahnya.
+///      Tidak ada lagi kepadatan yang meluruh ke atas.
+///   4. MULUS DI SAMBUNGAN. Periode motif selalu dipilih dari pembagi jumlah
+///      kolom, jadi kolom terakhir menyambung mulus ke kolom 0 - tidak ada
+///      jahitan yang kelihatan saat tabung diputar.
+///   5. PALET TERBATAS. Tiap ronde hanya memakai PALETTE_SIZE warna (default 3),
+///      diundi dari palet penuh, dan warna diberikan PER MOTIF - bukan per sel.
+///      Ini pembeda terbesar dari versi lama yang terlihat seperti confetti.
 ///
-/// "DISESUAIKAN DENGAN PILIHAN BLOK" - INI BAGIAN PENTINGNYA:
-///   Urutannya sengaja dibalik dari cara biasa.
-///     a. Papan ditabur lebih dulu.
-///     b. Tray dicetak ulang DARI papan itu (RegenerateTray), dengan bias clear
-///        tinggi. Smart-drop bawaan memahat tiap potongan dari celah NYATA, jadi
-///        ketiganya dijamin muat.
-///     c. Lalu dicek dengan geometri sungguhan: adakah SATU penempatan sah yang
-///        langsung melengkapi cincin atau kolom? Kalau ADA, papan dibiarkan.
-///        Kalau TIDAK ADA, papan yang mengalah: dipilih pasangan potongan +
-///        penempatan yang paling murah, lalu sisa cincin itu diisi supaya
-///        potongan tersebut menutupnya PERSIS.
-///   Jadi bukan pemain yang disuruh mencari celah bikinan - papannya yang
-///   dibentuk mengikuti potongan yang memang dia pegang. Batas ADAPT_MAX_FILL
-///   menjaga penyesuaian ini tetap beberapa sel saja, supaya tidak kelihatan
-///   seperti baris yang ditanam.
+/// LEBIH MUDAH:
+///   - Pita cuma setinggi BAND_ROWS baris, sisanya lapang.
+///   - Kepadatan motif berkisar 30-55%, bukan 80%.
+///   - Ada "jendela" yang sengaja dilubangi, berpasangan di sisi seberang tabung
+///     supaya tetap terlihat disengaja, bukan rusak.
+///   - Tray pembuka dibias kuat ke potongan yang bisa langsung meng-clear.
+///   - Kalau ternyata tetap tidak ada clear yang mungkin, PAPANNYA yang mengalah
+///     (AdaptToTray) - sisa satu cincin diisi memakai warna motif yang sama, jadi
+///     tambalannya menyatu dengan mozaik.
+///
+/// PERPUSTAKAAN MOTIF:
+///   0 RIBBON  - pita diagonal (garis miring lebar 2)
+///   1 CHECKER - papan catur blok 2x2
+///   2 LATTICE - kisi motif plus/wajik
+///   3 CHEVRON - zigzag
+///   4 GROUT   - kisi garis nat (paling padat, sering bikin cincin nyaris penuh)
+///   5 WAVE    - pita gelombang mengalir mengelilingi tabung
+///   6 BRICK   - susunan bata berselang-seling
 ///
 /// KENAPA FILE TERPISAH (BUKAN MENGEDIT BlastGame.cs):
-///   BlastGame.cs sudah 33 KB - jauh di atas batas aman push kita dan satu-satunya
-///   file yang pernah terpotong diam-diam. Ternyata semua yang kita butuh SUDAH
+///   BlastGame.cs 33 KB - di atas batas aman push. Semua yang dibutuhkan sudah
 ///   publik: Core.Grid, Core.Wrap, Core.CanPlace, Core.RegenerateTray,
-///   Core.CanPlaceAnywhere, Core.ClearBias, dan RenderGrid(). Jadi StartingFill()
-///   bawaan dibiarkan jalan apa adanya, lalu hasilnya kita timpa dari luar.
-///   NOL perubahan di file besar.
+///   Core.CanPlaceAnywhere, Core.ClearBias, RenderGrid(). StartingFill() bawaan
+///   dibiarkan jalan, hasilnya kita timpa dari luar. NOL perubahan di file besar.
 ///
-/// KENAPA TIDAK PAKAI EVENT OnRebuilt:
-///   Bootstrap AfterSceneLoad bisa jalan SETELAH BlastGame.Start() memanggil
-///   Rebuild(), jadi OnRebuilt papan PERTAMA bisa terlewat. Karena itu kita pantau
-///   IDENTITAS BlastCore: core baru = ronde baru. Cara ini menangkap papan pertama
-///   maupun setiap PLAY AGAIN, dan mustahil jalan dua kali untuk ronde yang sama.
+/// KENAPA POLLING, BUKAN EVENT OnRebuilt:
+///   Bootstrap AfterSceneLoad bisa jalan SETELAH Rebuild() pertama, jadi event
+///   papan pertama bisa terlewat. Kita pantau IDENTITAS BlastCore: core baru =
+///   ronde baru. Menangkap papan pertama maupun tiap PLAY AGAIN, dan mustahil
+///   jalan dua kali untuk ronde yang sama.
 ///
 /// HUBUNGAN DENGAN KubikaIntro:
-///   RenderGrid() di sini membuat blok baru dalam keadaan AKTIF. Itu aman, karena
-///   IntroRoutine() punya jaring pengaman yang mematikan SEMUA blok sekaligus
-///   sebelum tiruan pertama diluncurkan - jadi tabung tetap mulai KOSONG.
+///   RenderGrid() membuat blok dalam keadaan AKTIF, dan itu aman karena
+///   IntroRoutine() mematikan SEMUA blok sekaligus sebelum tiruan pertama
+///   diluncurkan - tabung tetap mulai KOSONG.
 /// </summary>
 public class KubikaStartLayout : MonoBehaviour
 {
     // ================= TOMBOL PENYETEL =================
 
-    /// <summary>Tinggi maksimum taburan, dihitung dari dasar tabung.</summary>
-    const int FOUNDATION_ROWS = 4;
+    /// <summary>Tinggi pita mozaik dalam baris. Kecilkan = makin mudah &amp; makin lapang.</summary>
+    const int BAND_ROWS = 5;
 
-    /// <summary>Ambang kepadatan di baris PALING BAWAH (0..1). Makin besar makin padat.</summary>
-    const float BASE_DENSITY = 0.80f;
+    /// <summary>Geser pita naik (+) atau turun (-) dari tengah tabung.</summary>
+    const int BAND_SHIFT = 0;
 
-    /// <summary>Ambang kepadatan di baris fondasi PALING ATAS. Jaga tetap kecil.</summary>
-    const float TOP_DENSITY = 0.16f;
+    /// <summary>Berapa warna yang dipakai satu ronde. 2 = paling tenang, 3 = seimbang.</summary>
+    const int PALETTE_SIZE = 3;
 
-    /// <summary>Goyangan acak pada tepi massa. 0 = tepi mulus, 0.2 = compang-camping.</summary>
-    const float EDGE_JITTER = 0.10f;
-
-    /// <summary>Berapa kantong kosong yang dilubangi di dalam massa.</summary>
-    const int POCKET_MIN = 2;
-    const int POCKET_MAX = 4;
-
-    /// <summary>Berapa butiran melayang yang ditaruh di atas massa utama.</summary>
-    const int SPRINKLE_MIN = 2;
-    const int SPRINKLE_MAX = 4;
-
-    /// <summary>Peluang satu sel memakai warna acak, sebagai bumbu di antara bercak.</summary>
-    const float SPECK_CHANCE = 0.08f;
+    /// <summary>Berapa pasang "jendela" yang dilubangi (tiap pasang = 2 lubang berseberangan).</summary>
+    const int WINDOW_PAIRS = 1;
+    const int WINDOW_W = 3;
+    const int WINDOW_H = 2;
 
     /// <summary>
     /// Seberapa kuat tray PEMBUKA dibias agar memuat potongan yang bisa meng-clear
@@ -101,17 +95,22 @@ public class KubikaStartLayout : MonoBehaviour
 
     /// <summary>
     /// Maksimum sel yang boleh DITAMBAHKAN demi menjamin clear di langkah pertama.
-    /// Kecilkan kalau papan mulai terasa "ditanam"; besarkan kalau clear pembuka
+    /// Kecilkan kalau tambalannya mulai terlihat; besarkan kalau clear pembuka
     /// terlalu jarang terjadi.
     /// </summary>
-    const int ADAPT_MAX_FILL = 5;
+    const int ADAPT_MAX_FILL = 6;
+
+    const int PATTERN_COUNT = 7;
 
     BlastGame _game;
     BlastCore _lastCore;
 
-    // Fase gelombang, diundi ulang tiap ronde supaya bentuk & bercak warna
-    // selalu berbeda walau rumusnya sama.
-    readonly float[] _ph = new float[5];
+    // Gaya ronde ini - semuanya diundi ulang tiap papan baru.
+    int _pattern = -1;
+    int _spin, _dir, _mirror, _flip;
+    float _phase;
+    int _bandRows, _rowStart;
+    readonly int[] _pal = new int[PALETTE_SIZE];
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void Bootstrap()
@@ -141,8 +140,7 @@ public class KubikaStartLayout : MonoBehaviour
     {
         if (_game == null || core == null) return;
 
-        // Hormati setelan scene: kalau pemilik scene memang mau papan kosong atau
-        // sedang memakai demoFill, jangan ikut campur.
+        // Hormati setelan scene.
         if (!_game.startWithBlocks || _game.demoFill) return;
         if (core.GameOver) return;
 
@@ -151,123 +149,241 @@ public class KubikaStartLayout : MonoBehaviour
         int colors = Mathf.Max(1, _game.numColors);
         if (cols <= 2 || h <= 3) return;
 
-        int rows = Mathf.Clamp(FOUNDATION_ROWS, 1, h - 2);
+        // Pita diletakkan di TENGAH papan: tabung tidak punya atas/bawah, jadi
+        // tidak ada alasan menumpuk di dasar. Ruang kosong di kedua sisi juga
+        // yang bikin langkah pertama gampang.
+        _bandRows = Mathf.Clamp(BAND_ROWS, 1, h - 2);
+        _rowStart = Mathf.Clamp((h - _bandRows) / 2 + BAND_SHIFT, 0, h - _bandRows);
 
-        for (int i = 0; i < _ph.Length; i++) _ph[i] = Random.Range(0f, Mathf.PI * 2f);
+        RollStyle(cols, colors);
 
         // ===== 1. Kosongkan papan (buang hasil acak StartingFill) =====
         for (int c = 0; c < cols; c++)
             for (int r = 0; r < h; r++)
                 core.Grid[c, r] = -1;
 
-        // ===== 2. Taburan organik =====
-        Scatter(core, cols, h, rows, colors);
+        // ===== 2. Cetak mozaik =====
+        for (int r = _rowStart; r < _rowStart + _bandRows; r++)
+            for (int c = 0; c < cols; c++)
+            {
+                int m = Motif(c, r, cols);
+                if (m >= 0) core.Grid[c, r] = _pal[Mod(m, PALETTE_SIZE)];
+            }
 
-        // ===== 3. Jaring pengaman anti auto-clear =====
-        // Papan tidak boleh punya cincin/kolom penuh sebelum disentuh pemain.
+        // ===== 3. Jendela yang disengaja =====
+        CarveWindows(core, cols);
+
+        // ===== 4. Anti auto-clear =====
+        // Motif seperti GROUT bisa menghasilkan cincin penuh. Satu sel dilubangi,
+        // dan justru itu yang menyisakan cincin nyaris penuh - enak buat pembuka.
         BreakFullLines(core, cols, h);
 
-        // ===== 4. Tray pembuka =====
-        // WAJIB: tray lama dipahat dari papan acak yang baru saja kita buang, jadi
-        // potongannya bisa tidak muat sama sekali (mati instan). Sekalian dibias
-        // kuat supaya cenderung memuat potongan yang bisa langsung meng-clear.
+        // ===== 5. Tray pembuka =====
+        // WAJIB: tray lama dipahat dari papan yang baru saja kita buang.
         core.ClearBias = Mathf.Clamp01(OPENING_CLEAR_BIAS);
         core.RegenerateTray();
-        // Pulihkan ke nilai scene. Dibaca dari _game.clearBias (bukan dari core)
-        // supaya tidak bergantung pada ada-tidaknya getter di BlastCore.
         core.ClearBias = Mathf.Clamp01(_game.clearBias);
 
-        // ===== 5. Cocokkan papan ke potongan yang benar-benar dipegang pemain =====
+        // ===== 6. Cocokkan papan ke potongan yang benar-benar dipegang pemain =====
         if (!HasImmediateClear(core, cols, h))
-            AdaptToTray(core, cols, h, rows, colors);
+            AdaptToTray(core, cols, h);
 
-        // ===== 6. Anti mati-instan =====
+        // ===== 7. Anti mati-instan =====
         int guard = 0;
-        int maxSteps = cols * rows + 1;
+        int maxSteps = cols * _bandRows + 1;
         while (!AnyTrayFits(core) && guard++ < maxSteps)
-            core.Grid[Random.Range(0, cols), Random.Range(0, rows)] = -1;
+            core.Grid[Random.Range(0, cols), Random.Range(_rowStart, _rowStart + _bandRows)] = -1;
 
-        // ===== 7. Gambar ulang =====
+        // ===== 8. Gambar ulang =====
         _game.RenderGrid();
     }
 
-    // ================= TABURAN =================
+    // ================= GAYA RONDE =================
 
-    void Scatter(BlastCore core, int cols, int h, int rows, int colors)
+    /// <summary>
+    /// Semua keacakan permainan ini ada DI SINI, dan berhenti di sini. Setelah
+    /// gaya terundi, pencetakan mozaik sepenuhnya deterministik - itulah kenapa
+    /// hasilnya selalu rapi walaupun selalu berbeda.
+    /// </summary>
+    void RollStyle(int cols, int colors)
     {
-        // 2a. Massa utama: ambang kepadatan turun makin ke atas, jadi terbentuk
-        //     siluet berombak yang berat di dasar.
-        for (int r = 0; r < rows; r++)
-        {
-            float t = (rows <= 1) ? 0f : r / (float)(rows - 1);
-            float density = Mathf.Lerp(BASE_DENSITY, TOP_DENSITY, t);
+        int p = Random.Range(0, PATTERN_COUNT);
+        // Jangan mengulang motif ronde sebelumnya - pengulangan langsung itu yang
+        // paling terasa "kok gitu-gitu aja".
+        if (p == _pattern) p = (p + 1 + Random.Range(0, PATTERN_COUNT - 1)) % PATTERN_COUNT;
+        _pattern = p;
 
-            for (int c = 0; c < cols; c++)
+        _spin = Random.Range(0, cols);
+        _dir = Random.value < 0.5f ? -1 : 1;
+        _mirror = Random.value < 0.5f ? 1 : 0;
+        _flip = Random.value < 0.5f ? 1 : 0;
+        _phase = Random.Range(0f, Mathf.PI * 2f);
+
+        PickPalette(colors);
+    }
+
+    /// <summary>Ambil PALETTE_SIZE warna berbeda dari palet penuh, acak tiap ronde.</summary>
+    void PickPalette(int colors)
+    {
+        var all = new int[colors];
+        for (int i = 0; i < colors; i++) all[i] = i;
+        for (int i = colors - 1; i > 0; i--)
+        {
+            int j = Random.Range(0, i + 1);
+            int t = all[i]; all[i] = all[j]; all[j] = t;
+        }
+
+        int n = Mathf.Max(1, Mathf.Min(PALETTE_SIZE, colors));
+        for (int i = 0; i < _pal.Length; i++) _pal[i] = all[i % n];
+    }
+
+    // ================= PERPUSTAKAAN MOTIF =================
+
+    /// <summary>
+    /// Mengembalikan nomor motif untuk sel (c,r), atau -1 kalau sel itu kosong.
+    /// Nomor motif dipetakan ke warna lewat _pal, jadi satu bentuk = satu warna.
+    /// </summary>
+    int Motif(int c, int r, int cols)
+    {
+        int y = r - _rowStart;
+        if (y < 0 || y >= _bandRows) return -1;
+
+        // Cermin, putaran, dan balik vertikal - variasi gratis tanpa merusak pola.
+        int x = (_mirror == 1) ? (cols - 1 - c) : c;
+        x = Mod(x + _spin, cols);
+        int v = (_flip == 1) ? (_bandRows - 1 - y) : y;
+
+        switch (_pattern)
+        {
+            case 0: return Ribbon(x, v, cols);
+            case 1: return Checker(x, v, cols);
+            case 2: return Lattice(x, v, cols);
+            case 3: return Chevron(x, v, cols);
+            case 4: return Grout(x, v, cols);
+            case 5: return Wave(x, v, cols);
+            default: return Brick(x, v, cols);
+        }
+    }
+
+    /// <summary>Pita diagonal lebar 2. Miringnya ikut _dir.</summary>
+    int Ribbon(int x, int y, int cols)
+    {
+        int p = Period(cols, 4);
+        int s = Mod(x + _dir * y, cols);
+        return (s % p) < (p / 2) ? (s / p) : -1;
+    }
+
+    /// <summary>Papan catur dengan blok 2x2.</summary>
+    int Checker(int x, int y, int cols)
+    {
+        // Ukuran blok harus membuat jumlah blok per keliling GENAP, kalau tidak
+        // sambungan kolom terakhir ke kolom 0 akan kelihatan.
+        int b = (cols % 4 == 0) ? 2 : 1;
+        int bx = x / b, by = y / b;
+        return ((bx + by) % 2 == 0) ? (bx + by * 2) : -1;
+    }
+
+    /// <summary>Kisi motif plus/wajik kecil - paling longgar, paling mudah.</summary>
+    int Lattice(int x, int y, int cols)
+    {
+        int p = Period(cols, 4);
+        int u = Mod(x, p), w = Mod(y, p);
+        int cu = p / 2;
+        return (Mathf.Abs(u - cu) + Mathf.Abs(w - cu) <= 1) ? (x / p + (y / p) * 2) : -1;
+    }
+
+    /// <summary>Zigzag: pita vertikal yang digeser bolak-balik tiap baris.</summary>
+    int Chevron(int x, int y, int cols)
+    {
+        int p = Period(cols, 6);
+        int amp = Mathf.Max(1, p / 2);
+        int t = Mod(y, amp * 2);
+        int off = (t <= amp) ? t : (amp * 2 - t);
+        int s = Mod(x - off * _dir, cols);
+        return (s % p) < (p / 2) ? (s / p) : -1;
+    }
+
+    /// <summary>Kisi garis nat. Motif terpadat - sering menyisakan cincin nyaris penuh.</summary>
+    int Grout(int x, int y, int cols)
+    {
+        int p = Period(cols, 3);
+        return (Mod(x, p) == 0 || Mod(y, p) == 0) ? (x / p + y / p) : -1;
+    }
+
+    /// <summary>Pita gelombang setebal 2 yang mengalir mengelilingi tabung.</summary>
+    int Wave(int x, int y, int cols)
+    {
+        float a = (x / (float)cols) * Mathf.PI * 4f + _phase; // 2 puncak per keliling -> mulus
+        float mid = (_bandRows - 1) * 0.5f;
+        float amp = (_bandRows - 1) * 0.5f;
+        int cy = Mathf.RoundToInt(mid + amp * Mathf.Sin(a));
+        if (y != cy && y != cy - 1) return -1;
+        return Mathf.FloorToInt((x / (float)cols) * (PALETTE_SIZE * 2f));
+    }
+
+    /// <summary>Susunan bata: potongan lebar 2, berselang-seling tiap baris.</summary>
+    int Brick(int x, int y, int cols)
+    {
+        int p = Period(cols, 4);
+        int off = (Mod(y, 2) == 0) ? 0 : (p / 2);
+        int s = Mod(x + off, cols);
+        return (s % p) < (p / 2) ? (s / p + y) : -1;
+    }
+
+    /// <summary>
+    /// Periode motif WAJIB membagi habis jumlah kolom, kalau tidak akan ada
+    /// jahitan di tempat tabung menyambung. Dicari pembagi terdekat dari nilai
+    /// yang diinginkan.
+    /// </summary>
+    static int Period(int cols, int want)
+    {
+        for (int p = want; p >= 2; p--) if (cols % p == 0) return p;
+        for (int p = want + 1; p <= cols; p++) if (cols % p == 0) return p;
+        return Mathf.Max(2, cols);
+    }
+
+    static int Mod(int a, int b) => ((a % b) + b) % b;
+
+    // ================= JENDELA =================
+
+    /// <summary>
+    /// Lubang persegi yang disengaja. Selalu dibuat BERPASANGAN di sisi seberang
+    /// tabung supaya terbaca sebagai bagian desain, bukan pola yang rusak.
+    /// </summary>
+    void CarveWindows(BlastCore core, int cols)
+    {
+        for (int i = 0; i < WINDOW_PAIRS; i++)
+        {
+            int span = Mathf.Max(1, _bandRows - WINDOW_H + 1);
+            int c0 = Random.Range(0, cols);
+            int r0 = _rowStart + Random.Range(0, span);
+            Carve(core, cols, c0, r0);
+            Carve(core, cols, c0 + cols / 2, r0);
+        }
+    }
+
+    void Carve(BlastCore core, int cols, int c0, int r0)
+    {
+        for (int dx = 0; dx < WINDOW_W; dx++)
+            for (int dy = 0; dy < WINDOW_H; dy++)
             {
-                float n = Ridge(c, cols, r) + Random.Range(-EDGE_JITTER, EDGE_JITTER);
-                if (n < density) core.Grid[c, r] = Tint(c, cols, r, colors);
+                int r = r0 + dy;
+                if (r < _rowStart || r >= _rowStart + _bandRows) continue;
+                core.Grid[Mod(c0 + dx, cols), r] = -1;
             }
-        }
-
-        // 2b. Kantong kosong di dalam massa - bikin papan bernapas dan sekaligus
-        //     memastikan baris dasar tidak pernah rapat total.
-        int pockets = Random.Range(POCKET_MIN, POCKET_MAX + 1);
-        for (int i = 0; i < pockets; i++)
-            core.Grid[Random.Range(0, cols), Random.Range(0, rows)] = -1;
-
-        // 2c. Butiran melayang di atas massa. Tanpa gravity ini sah, dan justru
-        //     yang bikin papan terasa DITABUR bukan digambar.
-        int sprinkle = Random.Range(SPRINKLE_MIN, SPRINKLE_MAX + 1);
-        int top = Mathf.Min(rows + 2, h);
-        for (int i = 0; i < sprinkle; i++)
-        {
-            int c = Random.Range(0, cols);
-            int r = Random.Range(rows, top);
-            if (r >= 0 && r < h && core.Grid[c, r] < 0)
-                core.Grid[c, r] = Tint(c, cols, r, colors);
-        }
-    }
-
-    /// <summary>
-    /// Medan kebisingan halus yang PERIODIK mengelilingi tabung (kolom terakhir
-    /// nyambung ke kolom 0, jadi tidak ada jahitan yang kelihatan). Jumlah tiga
-    /// gelombang sinus dengan frekuensi berbeda - murah, dan cukup untuk membuat
-    /// gumpalan yang menyambung alih-alih bintik acak.
-    /// </summary>
-    float Ridge(int c, int cols, int r)
-    {
-        float a = (c / (float)cols) * Mathf.PI * 2f;
-        float n = 0.5f;
-        n += 0.26f * Mathf.Sin(a + _ph[0] + r * 0.42f);
-        n += 0.16f * Mathf.Sin(a * 2f + _ph[1] - r * 0.31f);
-        n += 0.09f * Mathf.Sin(a * 3f + _ph[2] + r * 0.67f);
-        return n;
-    }
-
-    /// <summary>
-    /// Warna diambil dari medan halus KEDUA, bukan diundi per sel. Sel bertetangga
-    /// jadi cenderung sewarna sehingga terbentuk bercak yang berpilin mengelilingi
-    /// tabung. SPECK_CHANCE menyisipkan sedikit warna nyasar sebagai bumbu.
-    /// </summary>
-    int Tint(int c, int cols, int r, int colors)
-    {
-        if (colors <= 1) return 0;
-        if (Random.value < SPECK_CHANCE) return Random.Range(0, colors);
-
-        float a = (c / (float)cols) * Mathf.PI * 2f;
-        float v = 0.5f
-                + 0.34f * Mathf.Sin(a + _ph[3] + r * 0.30f)
-                + 0.16f * Mathf.Sin(a * 2f + _ph[4] - r * 0.55f);
-
-        int idx = Mathf.FloorToInt(Mathf.Clamp01(v) * colors);
-        return Mathf.Clamp(idx, 0, colors - 1);
     }
 
     // ================= PENYESUAIAN KE TRAY =================
 
-    /// <summary>
-    /// Adakah SATU penempatan sah dari tray yang langsung melengkapi cincin/kolom?
-    /// </summary>
+    /// <summary>Warna motif untuk sel tertentu; dipakai saat menambal supaya menyatu.</summary>
+    int ColorAt(int c, int r, int cols)
+    {
+        int m = Motif(c, r, cols);
+        if (m < 0) m = c + r * 2;
+        return _pal[Mod(m, PALETTE_SIZE)];
+    }
+
+    /// <summary>Adakah SATU penempatan sah dari tray yang langsung melengkapi cincin/kolom?</summary>
     static bool HasImmediateClear(BlastCore core, int cols, int h)
     {
         if (core.Tray == null) return false;
@@ -286,7 +402,7 @@ public class KubikaStartLayout : MonoBehaviour
     }
 
     /// <summary>
-    /// Simulasi di grid salinan: kalau potongan ini ditaruh di (col,row), apakah
+    /// Simulasi di grid SALINAN: kalau potongan ini ditaruh di (col,row), apakah
     /// ada cincin atau kolom yang jadi penuh? Grid asli tidak pernah disentuh.
     /// </summary>
     static bool CompletesLine(BlastCore core, BlastCore.Piece p, int col, int row, int cols, int h)
@@ -318,11 +434,10 @@ public class KubikaStartLayout : MonoBehaviour
 
     /// <summary>
     /// Papan yang mengalah ke tray. Dicari pasangan (potongan, penempatan, cincin)
-    /// yang paling MURAH - artinya cincin itu tinggal kurang beberapa sel saja -
-    /// lalu sisanya diisi supaya potongan tersebut menutupnya persis. Cincin yang
-    /// lebih rendah dimenangkan saat seri, karena clear di dasar paling terasa.
+    /// yang paling MURAH - cincin yang tinggal kurang beberapa sel - lalu sisanya
+    /// diisi dengan WARNA MOTIF supaya tambalannya menyatu dengan mozaik.
     /// </summary>
-    void AdaptToTray(BlastCore core, int cols, int h, int rows, int colors)
+    void AdaptToTray(BlastCore core, int cols, int h)
     {
         if (core.Tray == null) return;
 
@@ -330,13 +445,15 @@ public class KubikaStartLayout : MonoBehaviour
         BlastCore.Piece bestPiece = null;
         int bestCol = 0, bestRow = 0, bestRing = -1;
 
-        int rMax = Mathf.Min(rows + 1, h);
+        int rLo = Mathf.Max(0, _rowStart - 1);
+        int rHi = Mathf.Min(h, _rowStart + _bandRows + 1);
+        int mid = _rowStart + _bandRows / 2;
 
         foreach (var p in core.Tray)
         {
             if (p == null || p.Used) continue;
 
-            for (int r0 = 0; r0 < rMax; r0++)
+            for (int r0 = 0; r0 < h; r0++)
                 for (int c0 = 0; c0 < cols; c0++)
                 {
                     if (!core.CanPlace(p, c0, r0)) continue;
@@ -344,7 +461,7 @@ public class KubikaStartLayout : MonoBehaviour
                     foreach (var cell in p.Cells)
                     {
                         int ring = r0 + cell.y;
-                        if (ring < 0 || ring >= h) continue;
+                        if (ring < rLo || ring >= rHi) continue;
 
                         int cost = 0;
                         for (int c = 0; c < cols; c++)
@@ -355,8 +472,8 @@ public class KubikaStartLayout : MonoBehaviour
                         }
                         if (cost > ADAPT_MAX_FILL) continue;
 
-                        // cost yang menentukan; ring dipakai sebagai pemecah seri.
-                        int score = cost * 100 + ring;
+                        // cost yang menentukan; kedekatan ke tengah pita jadi pemecah seri.
+                        int score = cost * 100 + Mathf.Abs(ring - mid);
                         if (score < bestScore)
                         {
                             bestScore = score;
@@ -367,20 +484,19 @@ public class KubikaStartLayout : MonoBehaviour
                 }
         }
 
-        // Tidak ada kandidat yang cukup murah: biarkan saja. Tray sudah dibias 0.9,
-        // memaksa isi banyak sel justru akan merusak tampilan taburannya.
+        // Tidak ada kandidat cukup murah: biarkan. Tray sudah dibias 0.9, dan
+        // memaksa isi banyak sel justru merusak mozaiknya.
         if (bestPiece == null || bestRing < 0) return;
 
         for (int c = 0; c < cols; c++)
         {
             if (core.Grid[c, bestRing] >= 0) continue;
             if (Covers(core, bestPiece, bestCol, bestRow, c, bestRing)) continue;
-            core.Grid[c, bestRing] = Tint(c, cols, bestRing, colors);
+            core.Grid[c, bestRing] = ColorAt(c, bestRing, cols);
         }
 
-        // Secara teori mengisi cincin bisa melengkapi sebuah KOLOM. Kalau itu
-        // terjadi, lubangi kolomnya di baris SELAIN bestRing supaya jaminan tadi
-        // tidak ikut rusak.
+        // Mengisi cincin bisa tidak sengaja melengkapi sebuah KOLOM. Kalau terjadi,
+        // lubangi kolomnya di baris SELAIN bestRing supaya jaminan tadi tetap utuh.
         for (int c = 0; c < cols; c++)
         {
             bool full = true;
